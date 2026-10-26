@@ -14,13 +14,23 @@ MAX_ROWS = 10000
 MAX_PAGES = 40
 CURRENCIES = {"USD", "GBP", "EUR", "CAD", "AUD", "PKR"}
 ALIASES = {
-    "date": {"date", "transaction date", "posting date", "posted date", "trans date"},
-    "description": {"description", "merchant", "payee", "details", "transaction description", "memo"},
+    "date": {"date", "transaction date", "posting date", "posted date", "post date", "trans date"},
+    "description": {"description", "merchant", "payee", "details", "transaction description", "memo", "activity",
+                    "merchant name or transaction description"},
     "amount": {"amount", "transaction amount", "signed amount"},
     "debit": {"debit", "debits", "withdrawal", "withdrawals", "money out", "charge", "charges"},
     "credit": {"credit", "credits", "deposit", "deposits", "money in", "payment", "payments"},
     "currency": {"currency", "currency code"},
+    "balance": {"balance", "running balance", "running bal", "running bal."},
+    "type": {"type", "transaction type"},
 }
+HEADER_PRIORITY = {
+    "date": ("transaction date", "trans date", "date", "posting date", "posted date", "post date"),
+    "description": ("description", "transaction description", "merchant name or transaction description",
+                    "merchant", "payee", "activity", "details", "memo"),
+}
+OPENING_LABELS = {"opening balance", "beginning balance", "balance brought forward"}
+CLOSING_LABELS = {"closing balance", "ending balance", "balance carried forward"}
 
 
 class ParseError(ValueError):
@@ -53,6 +63,7 @@ def money(value: str, *, decimal_separator: str = ".") -> int:
         raw = raw[: suffix.start()].strip()
     raw = re.sub(r"^(?:USD|GBP|EUR|CAD|AUD|PKR)\s*", "", raw, flags=re.I)
     raw = re.sub(r"[$£€]", "", raw).strip()
+    raw = re.sub(r"^([+-])\s+(?=\d)", r"\1", raw)
     if negative:
         raw = raw[1:-1]
     # Validate grouping before removing it; malformed numbers are never silently changed.
@@ -76,7 +87,7 @@ def money(value: str, *, decimal_separator: str = ".") -> int:
 
 def parse_date(value: str, date_order: str) -> str:
     raw = value.strip()
-    formats = ["%Y-%m-%d", "%Y/%m/%d", "%d %b %Y", "%d %B %Y", "%b %d, %Y"]
+    formats = ["%Y-%m-%d", "%Y/%m/%d", "%d %b %Y", "%d %B %Y", "%b %d, %Y", "%B %d, %Y"]
     formats += ["%m/%d/%Y", "%m-%d-%Y"] if date_order == "mdy" else ["%d/%m/%Y", "%d-%m-%Y"]
     for fmt in formats:
         try:
@@ -91,13 +102,20 @@ def parse_date(value: str, date_order: str) -> str:
 
 def header_map(row: list[str]) -> dict[str, int]:
     result = {}
+    names = {}
     for index, value in enumerate(row):
-        name = re.sub(r"[_\s]+", " ", str(value or "").strip().lower().lstrip("\ufeff"))
+        name = re.sub(r"[_\s]+", " ", str(value or "").strip().lower().lstrip("\ufeff*$ "))
         for key, variants in ALIASES.items():
             if name in variants:
                 if key in result:
-                    raise ParseError(f"Multiple {key} columns; keep one unambiguous column.")
+                    previous = names[key]
+                    ranking = HEADER_PRIORITY.get(key)
+                    if not ranking or previous == name:
+                        raise ParseError(f"Multiple {key} columns; keep one unambiguous column.")
+                    if ranking.index(name) >= ranking.index(previous):
+                        continue
                 result[key] = index
+                names[key] = name
     return result
 
 
@@ -130,6 +148,10 @@ def parse_table(
         raise ParseError("Both signed Amount and Debit / Credit columns found. Keep one amount format.")
     result = []
     errors = []
+    opening_balance = None
+    running_balance = None
+    closing_balance = None
+    declared_totals = None
     width = len(table[header_index])
     for index, values in enumerate(table[header_index + 1 :], header_index + 1):
         line = index + start_line
@@ -149,11 +171,33 @@ def parse_table(
             description = cell("description")
             if not description or len(description) > 500:
                 raise ParseError("Description must contain 1–500 characters.")
+            amount_cells = (cell("amount"), cell("debit"), cell("credit"))
+            label = description.casefold()
+            if "balance" in mapping and label in OPENING_LABELS | CLOSING_LABELS and not any(amount_cells):
+                parse_date(cell("date"), date_order)
+                balance = money(cell("balance"), decimal_separator=decimal_separator)
+                if label in OPENING_LABELS:
+                    if opening_balance is not None or result:
+                        raise ParseError("Opening balance must appear once, before transactions.")
+                    opening_balance = running_balance = balance
+                else:
+                    if closing_balance is not None:
+                        raise ParseError("Multiple closing balance rows.")
+                    closing_balance = balance
+                continue
+            if label in {"total", "totals"} and not cell("date") and {"debit", "credit"} <= mapping.keys():
+                if declared_totals is not None or cell("balance"):
+                    raise ParseError("Ambiguous totals row.")
+                declared_totals = (money(cell("debit"), decimal_separator=decimal_separator),
+                                   money(cell("credit"), decimal_separator=decimal_separator))
+                continue
+            if closing_balance is not None or declared_totals is not None:
+                raise ParseError("Transaction appears after a closing balance or totals row.")
             date = parse_date(cell("date"), date_order)
             row_currency = cell("currency").upper() or currency
             if row_currency not in CURRENCIES:
                 raise ParseError(f"Unsupported currency '{row_currency}'.")
-            for amount_text in (cell("amount"), cell("debit"), cell("credit")):
+            for amount_text in amount_cells:
                 marker = re.search(r"\b(USD|GBP|EUR|CAD|AUD|PKR)(?=\s*[-+($£€\d])", amount_text, re.I)
                 if marker and marker.group(1).upper() != row_currency:
                     raise ParseError("Amount currency conflicts with the Currency column or import setting.")
@@ -174,6 +218,17 @@ def parse_table(
                 if not cell("debit") and not cell("credit"):
                     raise ParseError("Missing Debit and Credit values.")
                 amount = credit - debit
+            transaction_type = cell("type").casefold()
+            if transaction_type in {"sale", "purchase", "debit"} and amount > 0 or (
+                transaction_type in {"return", "refund", "credit", "deposit"} and amount < 0
+            ):
+                raise ParseError("Amount sign conflicts with the transaction Type. Check the selected sign convention.")
+            if running_balance is not None:
+                expected = running_balance + (-amount if convention == "card" and "amount" in mapping else amount)
+                reported = money(cell("balance"), decimal_separator=decimal_separator)
+                if expected != reported:
+                    raise ParseError("Running balance does not reconcile with the transaction amount.")
+                running_balance = reported
             fingerprint = hashlib.sha256(
                 f"{date}|{description.upper()}|{amount}|{row_currency}".encode()
             ).hexdigest()
@@ -186,12 +241,19 @@ def parse_table(
             + " ".join(errors[:8])
             + (f" ({len(errors)} invalid rows in total.)" if len(errors) > 8 else "")
         )
+    if closing_balance is not None and running_balance != closing_balance:
+        raise ParseError("Closing balance does not reconcile with the imported transactions.")
+    if declared_totals is not None:
+        actual_totals = (-sum(r.amount_minor for r in result if r.amount_minor < 0),
+                         sum(r.amount_minor for r in result if r.amount_minor > 0))
+        if declared_totals != actual_totals:
+            raise ParseError("Declared debit/credit totals do not reconcile with the imported transactions.")
     return result
 
 
 def parse_csv(data: bytes, **options) -> ParsedStatement:
     try:
-        content = data.decode("utf-8-sig")
+        content = data.decode("utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
     except UnicodeDecodeError:
         try:
             content = data.decode("cp1252")

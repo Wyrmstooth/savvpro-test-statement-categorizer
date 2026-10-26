@@ -18,7 +18,9 @@ CATEGORIES = {
     "uncategorized": {"name": "Uncategorized", "color": "#c5a86b"},
 }
 EXPENSE_CATEGORIES = set(CATEGORIES) - {"income", "transfer", "personal", "uncategorized"}
-ENGINE_VERSION = "1.0.0"
+ENGINE_VERSION = "1.1.0"
+REFUND_WORDS = r"REFUND(?:ED)?|REVERS(?:AL|ED)|RETURN(?:ED)?"
+REFUND = re.compile(rf"\b(?:{REFUND_WORDS})\b")
 
 
 @dataclass(frozen=True)
@@ -85,7 +87,7 @@ def merchant_key(description: str) -> str:
     text = normalized_text(description)
     text = re.sub(r"^(?:(?:POS|DEBIT CARD|CREDIT CARD|PURCHASE|SQ|TST) )+", "", text)
     text = re.sub(r"\b(?:REF|AUTH|REFERENCE)\s+\w+\b", "", text)
-    text = re.sub(r"\b(?:REFUND|REVERSAL|RETURN)\b", "", text)
+    text = REFUND.sub("", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -150,6 +152,19 @@ def decide(description: str, amount_minor: int, learned: dict | None = None) -> 
     if amount_minor == 0:
         return Decision("uncategorized", "neutral", 0, True, ["Zero-value row needs confirmation."])
 
+    refund_marker = bool(REFUND.search(text))
+    if refund_marker and amount_minor < 0:
+        return Decision(
+            "uncategorized", "expense", 0, True,
+            ["Refund wording conflicts with an outgoing amount. Check the statement's sign convention."],
+        )
+    if refund_marker and PAYOUT.search(text):
+        return Decision(
+            "uncategorized", "refund", 0, True,
+            ["Refund or reversal wording conflicts with a payout or client payment. Confirm the money's purpose."],
+            evidence=["income.refund-conflict"],
+        )
+
     # Explicit money movement wins over merchant and learned expense rules.
     if TRANSFER.search(text):
         return Decision(
@@ -172,17 +187,7 @@ def decide(description: str, amount_minor: int, learned: dict | None = None) -> 
 
     matches = [rule for rule, pattern in COMPILED_RULES if pattern.search(text)]
     categories = {rule.category for rule in matches}
-    refund_marker = bool(re.search(r"\b(?:REFUND|REVERSAL|RETURN)\b", text))
     flow = "refund" if amount_minor > 0 and (matches or refund_marker) else base_flow
-
-    if refund_marker and amount_minor < 0:
-        return Decision(
-            "uncategorized",
-            "expense",
-            0,
-            True,
-            ["Refund wording conflicts with an outgoing amount. Check the statement's sign convention."],
-        )
 
     if learned and learned.get("merchant_key") == key and learned.get("direction") == base_flow:
         category = learned["category"]
