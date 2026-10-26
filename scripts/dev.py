@@ -31,7 +31,9 @@ def main():
                     "app.main:app",
                     "--app-dir",
                     "backend",
-                    "--reload",
+                    # Uvicorn's Windows reloader broadcasts Ctrl+C to this shared
+                    # console, which also stops npm. Keep the combined runner stable.
+                    *([] if os.name == "nt" else ["--reload"]),
                     "--host",
                     "127.0.0.1",
                     "--port",
@@ -45,7 +47,8 @@ def main():
                 subprocess.Popen(
                     command,
                     cwd=directory,
-                    shell=os.name == "nt",
+                    # Only npm.cmd requires a shell; execute Python directly.
+                    shell=os.name == "nt" and command[0] == npm,
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
                     if os.name == "nt"
                     else 0,
