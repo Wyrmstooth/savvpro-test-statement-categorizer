@@ -3,20 +3,20 @@ import hashlib
 import io
 import json
 import os
-import sqlite3
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.engine import CATEGORIES, ENGINE_VERSION, EXPENSE_CATEGORIES, decide, merchant_key
+from app.engine import CATEGORIES, ENGINE_VERSION, EXPENSE_CATEGORIES, decide, merchant_key, resolve_refund
 from app.parser import CURRENCIES, ParseError, ParsedStatement, parse_csv, parse_pdf
 from app.storage import connect, initialize, transaction_dict
 
@@ -30,6 +30,12 @@ def uid() -> str:
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def decimal_amount(minor: int) -> str:
+    sign = "-" if minor < 0 else ""
+    units, cents = divmod(abs(minor), 100)
+    return f"{sign}{units}.{cents:02d}"
 
 
 class Review(BaseModel):
@@ -95,6 +101,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         yield
 
     app = FastAPI(title="Folio", version=ENGINE_VERSION, lifespan=lifespan)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "testserver"])
     app.state.database = database
 
     @app.middleware("http")
@@ -137,10 +144,23 @@ def create_app(db_path: str | None = None) -> FastAPI:
             known = {r[0] for r in db.execute("SELECT fingerprint FROM transactions")}
             learned_rules = {(r["merchant_key"], r["direction"]): dict(r) for r in db.execute("SELECT * FROM rules")}
             duplicate_count = 0
-            for row in rows:
+            # Purchases precede refunds on a shared date, irrespective of CSV sort order.
+            for row in sorted(rows, key=lambda r: (r.date, r.amount_minor > 0, r.line)):
                 key = merchant_key(row.description)
                 direction = "expense" if row.amount_minor < 0 else "income"
                 decision = decide(row.description, row.amount_minor, learned_rules.get((key, direction)))
+                if decision.category == "uncategorized" and decision.flow == "refund":
+                    originals = [dict(r) for r in db.execute(
+                        """SELECT id,category,amount_minor FROM transactions WHERE merchant_key=? AND currency=?
+                           AND date<=? AND amount_minor<0 AND needs_review=0 AND included=1
+                           AND duplicate=0 AND flow='expense'""", (key, row.currency, row.date),
+                    )]
+                    refunded = db.execute(
+                        """SELECT COALESCE(SUM(amount_minor),0) FROM transactions WHERE merchant_key=?
+                           AND currency=? AND date<=? AND flow='refund' AND needs_review=0 AND included=1""",
+                        (key, row.currency, row.date),
+                    ).fetchone()[0]
+                    decision = resolve_refund(decision, row.amount_minor, originals, refunded)
                 duplicate = row.fingerprint in known
                 known.add(row.fingerprint)
                 reasons = list(decision.reasons)
@@ -326,13 +346,13 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if kind == "summary":
             writer.writerow(["Category", "Currency", "Net amount", "Transactions", "Needs review", "Confirmed net amount"])
             for group in summarize(rows, selected_currency)["categories"]:
-                writer.writerow([group["name"], selected_currency, f'{group["net_minor"] / 100:.2f}',
-                                 group["count"], group["review_count"], f'{group["confirmed_net_minor"] / 100:.2f}'])
+                writer.writerow([group["name"], selected_currency, decimal_amount(group["net_minor"]),
+                                 group["count"], group["review_count"], decimal_amount(group["confirmed_net_minor"])])
         else:
             writer.writerow(["Date", "Description", "Amount", "Currency", "Category", "Flow", "Status",
                              "Included", "Confidence score", "Reason", "Note", "Engine version", "Source row"])
             for row in rows:
-                values = [row["date"], row["description"], f'{row["amount_minor"] / 100:.2f}', row["currency"],
+                values = [row["date"], row["description"], decimal_amount(row["amount_minor"]), row["currency"],
                           CATEGORIES[row["category"]]["name"], row["flow"],
                           "Needs review" if row["needs_review"] else "Confirmed" if row["source"] == "user" else "Categorized",
                           "Yes" if row["included"] else "No", row["confidence"], " ".join(row["reasons"]),

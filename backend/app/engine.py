@@ -89,6 +89,32 @@ def merchant_key(description: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def resolve_refund(decision: Decision, amount_minor: int, candidates: list[dict], refunded_minor: int) -> Decision:
+    """Resolve an explicit unknown refund only against unambiguous, accepted earlier spending.
+
+    The caller restricts candidates to the exact merchant, currency and earlier dates.
+    A shared category can resolve partial refunds; competing categories or excess value abstain.
+    """
+    if decision.category != "uncategorized" or decision.flow != "refund" or amount_minor <= 0:
+        return decision
+    if not candidates:
+        return decision
+    categories = {row["category"] for row in candidates}
+    if len(categories) != 1 or not categories <= EXPENSE_CATEGORIES:
+        return Decision("uncategorized", "refund", 0, True,
+                        ["Earlier purchases at this merchant have different categories. Choose which expense this refund offsets."],
+                        evidence=["refund.conflicting-originals"])
+    capacity = -sum(row["amount_minor"] for row in candidates) - refunded_minor
+    if amount_minor > capacity:
+        return Decision("uncategorized", "refund", 0, True,
+                        ["This refund exceeds the remaining accepted spending at this merchant. Check the original purchase."],
+                        evidence=["refund.exceeds-originals"])
+    return Decision(next(iter(categories)), "refund", 95, False,
+                    ["Explicit refund matched earlier accepted spending at the exact merchant, in the same currency.",
+                     "All eligible original purchases agree on the category; this reduces expenses rather than adding income."],
+                    source="context", evidence=[f"refund.original:{r['id']}" for r in candidates[:5]])
+
+
 def valid_category_flow(category: str, flow: str) -> bool:
     return category in CATEGORIES and (category != "income" or flow == "income")
 

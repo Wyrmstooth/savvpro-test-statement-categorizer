@@ -177,3 +177,23 @@ def test_summary_export_includes_review_counts(client):
     rows = list(csv.DictReader(io.StringIO(exported)))
     assert len(rows) == 11
     assert sum(int(row["Needs review"]) for row in rows) == workspace(client)["summary"]["review_count"]
+
+
+def test_refund_history_linking_is_currency_date_and_capacity_scoped(client):
+    upload(client, "Date,Description,Amount\n2026-01-01,PAPER AND INK,-10")
+    row = workspace(client)["transactions"][0]
+    client.patch(f'/api/transactions/{row["id"]}', json=review_payload(row))
+    upload(client, "Date,Description,Amount\n2026-01-03,PAPER AND INK REFUND,4")
+    linked = workspace(client)["transactions"][0]
+    assert linked["source"] == "context"
+    assert linked["category"] == "office"
+    upload(client, "Date,Description,Amount\n2026-01-04,PAPER AND INK REFUND,7")
+    assert workspace(client)["transactions"][0]["needs_review"]
+    upload(client, "Date,Description,Amount\n2025-12-01,PAPER AND INK REFUND,1")
+    assert next(t for t in workspace(client)["transactions"] if t["date"] == "2025-12-01")["needs_review"]
+    upload(client, "Date,Description,Amount\n2026-02-01,PAPER AND INK REFUND,1", currency="GBP")
+    assert workspace(client, currency="GBP")["transactions"][0]["needs_review"]
+
+
+def test_untrusted_host_cannot_rebind_local_workspace(client):
+    assert client.get("/api/workspace", headers={"Host": "untrusted.example"}).status_code == 400

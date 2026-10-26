@@ -1,6 +1,6 @@
 import pytest
 
-from app.engine import decide, merchant_key
+from app.engine import decide, merchant_key, resolve_refund
 
 
 @pytest.mark.parametrize("description,amount,category,flow,review", [
@@ -61,3 +61,27 @@ def test_transfer_guard_precedes_user_rule():
 def test_money_size_cannot_invent_category():
     for amount in (-1, -1000, -100000000):
         assert decide("UNKNOWN MERCHANT", amount).needs_review
+
+
+def test_partial_refund_can_use_unambiguous_accepted_spending():
+    decision = decide("PAPER AND INK REFUND", 500)
+    originals = [{"id": "original", "category": "office", "amount_minor": -1000}]
+    resolved = resolve_refund(decision, 500, originals, 0)
+    assert resolved.category == "office"
+    assert resolved.flow == "refund"
+    assert resolved.source == "context"
+    assert "refund.original:original" in resolved.evidence
+
+
+def test_refund_linking_abstains_on_conflict_and_excess():
+    decision = decide("PAPER AND INK REFUND", 500)
+    originals = [{"id": "a", "category": "office", "amount_minor": -1000}]
+    assert resolve_refund(decision, 500, originals, 600).needs_review
+    originals.append({"id": "b", "category": "software", "amount_minor": -1000})
+    assert resolve_refund(decision, 500, originals, 0).needs_review
+
+
+def test_unexplained_credit_does_not_borrow_a_category_from_history():
+    decision = decide("PAPER AND INK", 500)
+    originals = [{"id": "a", "category": "office", "amount_minor": -1000}]
+    assert resolve_refund(decision, 500, originals, 0) == decision

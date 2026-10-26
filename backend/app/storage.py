@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 CREATE INDEX IF NOT EXISTS ix_transaction_statement ON transactions(statement_id);
 CREATE INDEX IF NOT EXISTS ix_transaction_fingerprint ON transactions(fingerprint);
+CREATE INDEX IF NOT EXISTS ix_transaction_merchant_date ON transactions(merchant_key,currency,date);
 CREATE TABLE IF NOT EXISTS rules (
     id TEXT PRIMARY KEY, merchant_key TEXT NOT NULL, direction TEXT NOT NULL,
     category TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(merchant_key, direction)
