@@ -1,0 +1,11 @@
+{
+  "captured_at_utc": "2026-10-26T13:39:58.682219+00:00",
+  "python": "3.13.12",
+  "platform": "Windows",
+  "rows": 10000,
+  "file_bytes": 433005,
+  "import_seconds": 0.7639,
+  "workspace_read_seconds": 0.4809,
+  "review_count": 3750,
+  "scope": "Synthetic local API/SQLite throughput measurement, not a real-statement accuracy benchmark or SLA."
+}
