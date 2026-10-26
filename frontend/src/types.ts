@@ -37,6 +37,7 @@ export type MerchantRule = {
   direction: string;
   category: string;
   created_at: string;
+  needs_confirmation: boolean;
 };
 export type Group = Category & {
   count: number;
@@ -75,4 +76,10 @@ export type Workspace = {
   currencies: string[];
   engine_version: string;
 };
-export type History = { id: string; created_at: string; before: Transaction; after: Transaction };
+export type History = {
+  id: string;
+  created_at: string;
+  action: string;
+  before: Transaction;
+  after: Transaction;
+};

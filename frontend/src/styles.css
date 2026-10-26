@@ -3388,3 +3388,20 @@ tbody tr:hover {
   margin-top: 8px;
   min-height: 38px;
 }
+.sidebar-close {
+  display: none;
+}
+@media (max-width: 760px) {
+  .sidebar:not(.sidebar-open) {
+    visibility: hidden;
+  }
+  .sidebar.sidebar-open {
+    visibility: visible;
+  }
+  .sidebar-close {
+    display: inline-flex;
+    position: absolute;
+    top: 22px;
+    right: 14px;
+  }
+}

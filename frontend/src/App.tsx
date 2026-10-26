@@ -67,6 +67,7 @@ export default function App() {
   const [bulkError, setBulkError] = useState('');
   const [exportOpen, setExportOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 760px)').matches);
   const [demoBusy, setDemoBusy] = useState(false);
   const [removeId, setRemoveId] = useState<string | null>(null);
   const [removeBusy, setRemoveBusy] = useState(false);
@@ -75,6 +76,8 @@ export default function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const exportRef = useRef<HTMLDivElement>(null);
   const requestSequence = useRef(0);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const pageSize = 10;
 
   const load = useCallback(async () => {
@@ -98,6 +101,42 @@ export default function App() {
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 760px)');
+    const resize = () => {
+      setIsMobile(media.matches);
+      if (!media.matches) setMobileOpen(false);
+    };
+    media.addEventListener('change', resize);
+    return () => media.removeEventListener('change', resize);
+  }, []);
+  useEffect(() => {
+    if (!isMobile || !mobileOpen) return;
+    const sidebar = sidebarRef.current!;
+    const controls = () =>
+      [...sidebar.querySelectorAll<HTMLElement>('a[href], button:not(:disabled)')].filter(
+        (element) => element.getClientRects().length > 0,
+      );
+    (sidebar.querySelector<HTMLElement>('[aria-current="page"]') ?? controls()[0])?.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const items = controls(),
+        first = items[0],
+        last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    sidebar.addEventListener('keydown', trap);
+    return () => {
+      sidebar.removeEventListener('keydown', trap);
+      menuTriggerRef.current?.focus();
+    };
+  }, [isMobile, mobileOpen]);
   useEffect(() => {
     const onHash = () => {
       setView(viewFromHash());
@@ -128,7 +167,7 @@ export default function App() {
       ) {
         event.preventDefault();
         navigate('transactions');
-        searchRef.current?.focus();
+        window.requestAnimationFrame(() => searchRef.current?.focus());
       }
       if (event.key === 'Escape') {
         setExportOpen(false);
@@ -183,6 +222,17 @@ export default function App() {
   const pageRows = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const selectable = pageRows.filter((t) => !t.duplicate && t.amount_minor !== 0);
   const selectedRows = (data?.transactions ?? []).filter((t) => selected.has(t.id));
+  const bulkChoices = (data?.categories ?? []).filter(
+    (c) =>
+      c.id !== 'uncategorized' &&
+      (c.id !== 'income' ||
+        (selectedRows.length > 0 && selectedRows.every((t) => t.amount_minor > 0))),
+  );
+  const effectiveBulkCategory = bulkChoices.some((c) => c.id === bulkCategory)
+    ? bulkCategory
+    : (bulkChoices.find((c) => c.id === 'office')?.id ?? bulkChoices[0]?.id ?? '');
+  const validSelection =
+    selectedRows.length > 0 && selectedRows.length === selected.size && selected.size <= 200;
   const allSelected = selectable.length > 0 && selectable.every((t) => selected.has(t.id));
 
   function resetFilters() {
@@ -191,6 +241,12 @@ export default function App() {
     setFlow('all');
     setTab('all');
     setSort('date-desc');
+  }
+  function openHelp() {
+    if (isMobile && mobileOpen) {
+      setMobileOpen(false);
+      window.requestAnimationFrame(() => setHelpOpen(true));
+    } else setHelpOpen(true);
   }
   function openCategory(id: string) {
     resetFilters();
@@ -236,13 +292,17 @@ export default function App() {
   }
 
   async function bulkSave() {
+    if (!validSelection || !effectiveBulkCategory) {
+      setBulkError('The selection changed. Close this dialog and select the transactions again.');
+      return;
+    }
     setBulkBusy(true);
     setBulkError('');
     try {
       const result = await request<{ updated: number }>(
         '/review-batch',
         json({
-          category: bulkCategory,
+          category: effectiveBulkCategory,
           items: selectedRows.map((t) => ({ id: t.id, version: t.version })),
         }),
       );
@@ -309,17 +369,42 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <a className="skip-link" href="#main">
+      <a
+        className="skip-link"
+        href="#main"
+        inert={isMobile && mobileOpen}
+        onClick={(event) => {
+          event.preventDefault();
+          document.getElementById('main')?.focus();
+        }}
+      >
         Skip to content
       </a>
       {mobileOpen && (
         <button
           className="sidebar-backdrop"
           aria-label="Close navigation"
+          aria-hidden="true"
+          tabIndex={-1}
           onClick={() => setMobileOpen(false)}
         />
       )}
-      <aside className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`}>
+      <div
+        ref={sidebarRef}
+        className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`}
+        inert={isMobile && !mobileOpen}
+        aria-hidden={isMobile && !mobileOpen}
+        role={isMobile && mobileOpen ? 'dialog' : 'complementary'}
+        aria-modal={isMobile && mobileOpen ? true : undefined}
+        aria-label="Workspace navigation"
+      >
+        <button
+          className="icon-button sidebar-close"
+          aria-label="Close navigation"
+          onClick={() => setMobileOpen(false)}
+        >
+          <X size={20} />
+        </button>
         <a className="brand" href="#overview" aria-label="Folio home">
           <span className="brand-mark">
             <i />
@@ -361,7 +446,7 @@ export default function App() {
               Your books stay yours.<small>Processed locally.</small>
             </span>
           </div>
-          <button className="nav-item help-link" onClick={() => setHelpOpen(true)}>
+          <button className="nav-item help-link" onClick={openHelp}>
             <CircleHelp size={18} />
             <span>A little help</span>
             <ArrowUpRight size={14} />
@@ -375,15 +460,17 @@ export default function App() {
             <span className="small muted">LOCAL</span>
           </div>
         </div>
-      </aside>
+      </div>
 
-      <div className="main-shell">
+      <div className="main-shell" inert={isMobile && mobileOpen}>
         <header className="topbar">
           <div className="breadcrumb">
             <button
               className="icon-button mobile-menu"
+              ref={menuTriggerRef}
               onClick={() => setMobileOpen(true)}
               aria-label="Open navigation"
+              aria-expanded={mobileOpen}
             >
               <Menu size={20} />
             </button>
@@ -880,6 +967,7 @@ export default function App() {
                               <button
                                 className="text-button"
                                 onClick={() => {
+                                  setBulkCategory(effectiveBulkCategory);
                                   setBulkOpen(true);
                                   setBulkError('');
                                 }}
@@ -1214,6 +1302,12 @@ export default function App() {
                                   <tr key={rule.id}>
                                     <td>
                                       <strong>{rule.merchant_key}</strong>
+                                      {rule.needs_confirmation && (
+                                        <small className="field-hint">
+                                          Needs confirmation. Review this merchant and remember it
+                                          again.
+                                        </small>
+                                      )}
                                     </td>
                                     <td>
                                       {rule.direction === 'expense' ? 'Money out' : 'Money in'}
@@ -1316,7 +1410,7 @@ export default function App() {
                   <span>
                     <span className="tiny-brand">f.</span> A little clarity for your books.
                   </span>
-                  <button className="text-button" onClick={() => setHelpOpen(true)}>
+                  <button className="text-button" onClick={openHelp}>
                     Made for independent minds <ArrowUpRight size={12} />
                   </button>
                 </footer>
@@ -1388,18 +1482,16 @@ export default function App() {
           </p>
           <label>
             Category
-            <select value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)}>
-              {data.categories
-                .filter(
-                  (c) =>
-                    c.id !== 'uncategorized' &&
-                    (c.id !== 'income' || selectedRows.every((t) => t.amount_minor > 0)),
-                )
-                .map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
+            <select
+              value={effectiveBulkCategory}
+              onChange={(e) => setBulkCategory(e.target.value)}
+              disabled={bulkBusy}
+            >
+              {bulkChoices.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
             </select>
           </label>
           {bulkError && (
@@ -1417,7 +1509,7 @@ export default function App() {
             </button>
             <button
               className="button primary"
-              disabled={bulkBusy || selected.size > 200}
+              disabled={bulkBusy || !validSelection || !effectiveBulkCategory}
               onClick={bulkSave}
             >
               {bulkBusy ? <LoaderCircle className="spin" size={16} /> : <CheckCheck size={16} />}{' '}

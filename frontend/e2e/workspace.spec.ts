@@ -294,13 +294,11 @@ test('borderless card PDF requires a year and reconciles through the upload dial
   await page.goto('/');
   await page.getByRole('button', { name: 'Import statement', exact: true }).click();
   const dialog = page.getByRole('dialog');
-  await dialog
-    .getByLabel('Statement file')
-    .setInputFiles({
-      name: 'fictional-card-layout.pdf',
-      mimeType: 'application/pdf',
-      buffer: fixture,
-    });
+  await dialog.getByLabel('Statement file').setInputFiles({
+    name: 'fictional-card-layout.pdf',
+    mimeType: 'application/pdf',
+    buffer: fixture,
+  });
   await dialog.getByLabel('Signed amount convention').selectOption('card');
   await dialog.getByRole('button', { name: 'Import statement', exact: true }).click();
   await expect(dialog.getByRole('alert')).toContainText('Statement year');
@@ -321,4 +319,165 @@ test('borderless card PDF requires a year and reconciles through the upload dial
   await expect(page.getByRole('article').filter({ hasText: 'Business spending' })).toContainText(
     '$5.00',
   );
+});
+
+test('skip link focuses content without changing the current route or filters', async ({
+  page,
+}) => {
+  await page.goto('/#transactions');
+  await page.getByRole('textbox', { name: 'Search transactions' }).fill('FIGMA');
+  await page.getByRole('link', { name: 'Skip to content' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/#transactions$/);
+  await expect(page.locator('main')).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'Search transactions' })).toHaveValue('FIGMA');
+});
+
+test('closed mobile navigation is inert, open navigation traps focus, desktop remains available', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#transactions');
+  await expect(page.getByRole('textbox', { name: 'Search transactions' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Main navigation' })).toHaveCount(0);
+  await expect(page.locator('.sidebar')).toHaveAttribute('inert', '');
+  for (let i = 0; i < 18; i++) {
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.sidebar'))).toBe(false);
+  }
+  const trigger = page.getByRole('button', { name: 'Open navigation', exact: true });
+  await trigger.click();
+  const drawer = page.getByRole('dialog', { name: 'Workspace navigation' });
+  await expect(drawer).toBeVisible();
+  await expect(page.locator('.main-shell')).toHaveAttribute('inert', '');
+  for (let i = 0; i < 18; i++) {
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.sidebar'))).toBe(true);
+  }
+  expect(
+    (await new AxeBuilder({ page }).analyze()).violations.map((v) => ({
+      id: v.id,
+      nodes: v.nodes.map((n) => n.target),
+    })),
+  ).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(trigger).toBeFocused();
+  await expect(drawer).not.toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeVisible();
+  await expect(page.locator('.sidebar')).not.toHaveAttribute('inert', '');
+  await page.getByRole('link', { name: 'Categories', exact: true }).click();
+  await expect(page).toHaveURL(/#categories$/);
+});
+
+test('credits-only income choice cannot leak into the next debit batch', async ({
+  page,
+  request,
+}) => {
+  const file =
+    'Date,Description,Amount\n2026-12-01,REVIEW BATCH CREDIT,200\n2026-12-02,REVIEW BATCH DEBIT,-20';
+  const result = await request.post('/api/statements', {
+    multipart: {
+      file: { name: 'batch-validation.csv', mimeType: 'text/csv', buffer: Buffer.from(file) },
+    },
+  });
+  expect(result.status()).toBe(201);
+  await page.goto('/#transactions');
+  const search = page.getByRole('textbox', { name: 'Search transactions' });
+  await search.fill('REVIEW BATCH CREDIT');
+  await page.getByLabel('Select REVIEW BATCH CREDIT', { exact: true }).check();
+  await page.getByRole('button', { name: 'Categorize selected' }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByRole('combobox', { name: 'Category', exact: true }).selectOption('income');
+  await dialog.getByRole('button', { name: 'Confirm 1 rows', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await search.fill('REVIEW BATCH DEBIT');
+  await page.getByLabel('Select REVIEW BATCH DEBIT', { exact: true }).check();
+  await page.getByRole('button', { name: 'Categorize selected' }).click();
+  dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('combobox', { name: 'Category', exact: true })).toHaveValue(
+    'office',
+  );
+  await expect(dialog.getByRole('option', { name: 'Client income' })).toHaveCount(0);
+  const sent = page.waitForRequest(
+    (r) => r.url().endsWith('/api/review-batch') && r.method() === 'POST',
+  );
+  await dialog.getByRole('button', { name: 'Confirm 1 rows', exact: true }).click();
+  expect((await sent).postDataJSON().category).toBe('office');
+  await expect(dialog).not.toBeVisible();
+  await expect(page.locator('tbody tr')).toContainText('Office & supplies');
+  await expect(page.locator('tbody tr')).toContainText('Confirmed');
+});
+
+test('search shortcut focuses the field after navigating from another view', async ({ page }) => {
+  await page.goto('/#categories');
+  await expect(page.getByRole('heading', { name: 'See the bigger picture.' })).toBeVisible();
+  await page.keyboard.press('/');
+  await expect(page).toHaveURL(/#transactions$/);
+  await expect(page.getByRole('textbox', { name: 'Search transactions' })).toBeFocused();
+});
+
+test('editing a purchase surfaces its unsupported refund for review in the workspace', async ({
+  page,
+  request,
+}) => {
+  const original = await request.post('/api/statements', {
+    multipart: {
+      file: {
+        name: 'review-original.csv',
+        mimeType: 'text/csv',
+        buffer: Buffer.from('Date,Description,Amount\n2026-12-03,REVIEW SHOP,-10'),
+      },
+    },
+  });
+  const originalId = (await original.json()).statement_id;
+  let workspace = await (await request.get(`/api/workspace?statement_id=${originalId}`)).json();
+  const purchase = workspace.transactions[0];
+  expect(
+    (
+      await request.patch(`/api/transactions/${purchase.id}`, {
+        data: { category: 'office', flow: 'expense', version: purchase.version },
+      })
+    ).status(),
+  ).toBe(200);
+  expect(
+    (
+      await request.post('/api/statements', {
+        multipart: {
+          file: {
+            name: 'review-refund.csv',
+            mimeType: 'text/csv',
+            buffer: Buffer.from('Date,Description,Amount\n2026-12-04,REVIEW SHOP REFUND,7'),
+          },
+        },
+      })
+    ).status(),
+  ).toBe(201);
+  await page.goto('/#transactions');
+  await page.getByRole('textbox', { name: 'Search transactions' }).fill('REVIEW SHOP');
+  await page.getByRole('button', { name: 'Review REVIEW SHOP', exact: true }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByRole('combobox', { name: 'Category', exact: true }).selectOption('software');
+  await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  const refund = page.locator('tbody tr').filter({ hasText: 'REVIEW SHOP REFUND' });
+  await expect(refund).toContainText('Needs review');
+  await refund.getByRole('button', { name: 'Review REVIEW SHOP REFUND', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('available refund capacity changed');
+});
+
+test('help opened from mobile navigation restores a visible focus target', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const trigger = page.getByRole('button', { name: 'Open navigation', exact: true });
+  await trigger.click();
+  await page
+    .getByRole('dialog', { name: 'Workspace navigation' })
+    .getByRole('button', { name: 'A little help' })
+    .click();
+  await expect(page.getByRole('dialog', { name: 'A little help' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(trigger).toBeFocused();
 });

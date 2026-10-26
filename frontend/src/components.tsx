@@ -429,7 +429,7 @@ export function ReviewModal({
           Keep this transaction in totals
         </label>
       )}
-      {!row.duplicate && row.amount_minor !== 0 && (
+      {!row.duplicate && row.amount_minor !== 0 && row.merchant_key && (
         <label className="check-field">
           <input
             type="checkbox"
@@ -467,7 +467,11 @@ export function ReviewModal({
             {new Date(item.created_at).toLocaleString()} ·{' '}
             {categories.find((c) => c.id === item.before.category)?.name} →{' '}
             {categories.find((c) => c.id === item.after.category)?.name}
-            {!item.after.included ? ' · Excluded' : ''}
+            {!item.after.included
+              ? ' · Excluded'
+              : item.after.needs_review
+                ? ' · Needs review'
+                : ''}
           </p>
         ))}
         {row.evidence.length > 0 && (
