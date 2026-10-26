@@ -24,6 +24,22 @@ Codex used the local shell, GitHub CLI, FastAPI/pdfplumber primary documentation
 
 The resulting software is still bounded: synthetic tests do not establish universal statement accuracy, and PDF extraction must be reconciled. See `DESIGN.md`.
 
+## Follow-up: review remediation
+
+The submitted review correctly identified eight gaps in the earlier implementation: empty merchant identities, backdated refund capacity, unchecked export currency, permissive money cleanup, invalid batch versions, skip-link routing, hidden mobile navigation and retained batch category state. Codex traced and fixed these, added transactional refund allocations and startup identity migrations, and tested changes to the supporting purchases as well as concurrent refunds. OWASP's primary CSV-injection guidance informed the expanded free-text export tests; spreadsheet behavior remains a documented limitation.
+
+Browser testing caught an invalid `dialog` role on an `aside` in the first drawer fix. The container now uses valid dialog/complementary semantics, with tested inert state, focus containment and restoration. The updated suite has 202 backend and 20 browser cases; the external comparison still passes all 10 checks. See [REVIEW_FIXES.md](docs/REVIEW_FIXES.md) for the concrete remediation record. No classification model was introduced.
+
+The sanitized [review-fixes-token-log.json](docs/ai-usage/review-fixes-token-log.json) snapshot was captured at `2026-10-26T15:05:21.999283+00:00`. Its cumulative client total is 27,279,038 tokens, predominantly repeated cached input. Additional counts since the external-validation snapshot are below; subsequent documentation, CI monitoring and final reporting are excluded.
+
+| Counter | Additional tokens since external-validation snapshot |
+| --- | ---: |
+| Input (including cached) | 8,949,394 |
+| Cached input (subset) | 8,876,416 |
+| Output | 67,152 |
+| Reasoning (output subset) | 41,793 |
+| Input + output total | 9,016,546 |
+
 ## Actual token evidence
 
 [`docs/ai-usage/token-log.json`](docs/ai-usage/token-log.json) contains a sanitized snapshot of the local Codex client's actual `token_count` events. It records timestamps, token counters, and the model identifier if the client exposes it. It excludes prompts, tool payloads, local paths, account information, and credentials.

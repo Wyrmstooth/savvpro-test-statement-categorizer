@@ -65,6 +65,8 @@ Date,Description,Amount,Currency
 
 Alternatively use `Date,Description,Debit,Credit` with positive values in the appropriate column. Blank means absent; zero remains a real transaction.
 
+Money accepts one optional currency prefix, one sign, valid grouping, up to two decimal places, accounting parentheses, and explicit CR/DR direction. Embedded or repeated currency symbols, contradictory signs, and mixed metadata currencies are rejected instead of repaired. For example, `$12.34` is valid for USD; `1$2.34` and `$$12.34` are errors.
+
 | Setting | Behavior |
 | --- | --- |
 | Bank account | Negative signed amounts are money out; positive amounts are money in. |
@@ -110,12 +112,15 @@ Open **http://127.0.0.1:8000**. FastAPI serves the built React app and API toget
 
 SQLite stores parsed transactions, merchant rules, and review history in ignored `data/folio.db`. Set `FOLIO_DB` to use another database path. Original uploaded files are not retained. Fonts and application assets are bundled locally; no transaction content is sent to a remote classifier or analytics provider.
 
+Automatic refund matches reserve the earlier purchase's remaining amount. Backdated imports cannot reuse that reservation. Removing, excluding, or changing the category of the supporting purchase returns an unsupported automatic refund to review and records the change in its history. Startup migrations revalidate older matches; ambiguous old merchant rules remain visible for confirmation. Explicit human decisions remain authoritative.
+
 This is a **single-user local application**. Bind to loopback and use it on a trusted device. Authentication, tenant isolation, encrypted backups, and hardened PDF processing would be required before exposing it as a hosted service. The API rejects untrusted Host headers and cross-origin mutations, validates financial input, uses SQL parameters and transactional writes, detects stale reviews, and escapes spreadsheet formulas in free-text export fields.
 
 ## Project map
 
 ```text
 backend/app/engine.py      Original decision engine, evidence and refund reconciliation
+backend/app/refunds.py     Refund allocations, dependency checks and identity migration
 backend/app/parser.py      CSV/PDF ingestion and money/date validation
 backend/app/storage.py     SQLite schema and connection lifetime
 backend/app/main.py        API, atomic imports/reviews, summaries and exports
@@ -129,5 +134,7 @@ scripts/                   Cross-platform runner and sanitized AI usage exporter
 Read [`DESIGN.md`](DESIGN.md) for the engine and tradeoffs, [`AI_USAGE.md`](AI_USAGE.md) for how AI assisted development, and [`TASK.md`](TASK.md) for the original assessment.
 
 See [`docs/EXTERNAL_VALIDATION.md`](docs/EXTERNAL_VALIDATION.md) for tests against independently published statement samples: five exact imports, financial reconciliation, before/after evidence, and candid category-coverage results. Original external statements are kept outside the repository.
+
+See [`docs/REVIEW_FIXES.md`](docs/REVIEW_FIXES.md) for the eight review findings, related edge cases, and their regression coverage.
 
 The original fork/branch/submission guide is retained at [`docs/SUBMISSION_GUIDE.md`](docs/SUBMISSION_GUIDE.md). Work is on `candidate-Wyrmstooth`, targeting `savvpro/savvpro-test-statement-categorizer:main`.
