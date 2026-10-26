@@ -72,6 +72,7 @@ TRANSFER = re.compile(
     r"INTERNAL\s+TRANSFER|CREDIT\s+CARD\s+(?:AUTO\s+)?PAYMENT|PAYMENT\s+THANK\s+YOU)\b"
 )
 PAYOUT = re.compile(r"\b(?:STRIPE|SQUARE|PAYPAL)\s+PAYOUT\b|\bCLIENT\s+(?:PAYMENT|INVOICE)\b")
+BROAD_RETAILER = re.compile(r"^(?:AMAZON|AMZN|APPLE(?:\s+COM)?|WALMART|TARGET|COSTCO|EBAY|ETSY)\b")
 
 
 def normalized_text(description: str) -> str:
@@ -80,16 +81,17 @@ def normalized_text(description: str) -> str:
 
 
 def merchant_key(description: str) -> str:
-    """Remove only known bank wrappers and long reference numbers; preserve store/brand digits."""
+    """Remove known bank wrappers and labeled references; preserve all other digits."""
     text = normalized_text(description)
     text = re.sub(r"^(?:(?:POS|DEBIT CARD|CREDIT CARD|PURCHASE|SQ|TST) )+", "", text)
     text = re.sub(r"\b(?:REF|AUTH|REFERENCE)\s+\w+\b", "", text)
-    text = re.sub(r"\b\d{6,}\b", "", text)
     text = re.sub(r"\b(?:REFUND|REVERSAL|RETURN)\b", "", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
-def resolve_refund(decision: Decision, amount_minor: int, candidates: list[dict], refunded_minor: int) -> Decision:
+def resolve_refund(
+    decision: Decision, amount_minor: int, candidates: list[dict], refunded_minor: int
+) -> Decision:
     """Resolve an explicit unknown refund only against unambiguous, accepted earlier spending.
 
     The caller restricts candidates to the exact merchant, currency and earlier dates.
@@ -101,18 +103,40 @@ def resolve_refund(decision: Decision, amount_minor: int, candidates: list[dict]
         return decision
     categories = {row["category"] for row in candidates}
     if len(categories) != 1 or not categories <= EXPENSE_CATEGORIES:
-        return Decision("uncategorized", "refund", 0, True,
-                        ["Earlier purchases at this merchant have different categories. Choose which expense this refund offsets."],
-                        evidence=["refund.conflicting-originals"])
+        return Decision(
+            "uncategorized",
+            "refund",
+            0,
+            True,
+            [
+                "Earlier purchases at this merchant have different categories. Choose which expense this refund offsets."
+            ],
+            evidence=["refund.conflicting-originals"],
+        )
     capacity = -sum(row["amount_minor"] for row in candidates) - refunded_minor
     if amount_minor > capacity:
-        return Decision("uncategorized", "refund", 0, True,
-                        ["This refund exceeds the remaining accepted spending at this merchant. Check the original purchase."],
-                        evidence=["refund.exceeds-originals"])
-    return Decision(next(iter(categories)), "refund", 95, False,
-                    ["Explicit refund matched earlier accepted spending at the exact merchant, in the same currency.",
-                     "All eligible original purchases agree on the category; this reduces expenses rather than adding income."],
-                    source="context", evidence=[f"refund.original:{r['id']}" for r in candidates[:5]])
+        return Decision(
+            "uncategorized",
+            "refund",
+            0,
+            True,
+            [
+                "This refund exceeds the remaining accepted spending at this merchant. Check the original purchase."
+            ],
+            evidence=["refund.exceeds-originals"],
+        )
+    return Decision(
+        next(iter(categories)),
+        "refund",
+        95,
+        False,
+        [
+            "Explicit refund matched earlier accepted spending at the exact merchant, in the same currency.",
+            "All eligible original purchases agree on the category; this reduces expenses rather than adding income.",
+        ],
+        source="context",
+        evidence=[f"refund.original:{r['id']}" for r in candidates[:5]],
+    )
 
 
 def valid_category_flow(category: str, flow: str) -> bool:
@@ -128,13 +152,23 @@ def decide(description: str, amount_minor: int, learned: dict | None = None) -> 
 
     # Explicit money movement wins over merchant and learned expense rules.
     if TRANSFER.search(text):
-        return Decision("transfer", "transfer", 99, False,
-                        ["Explicit account transfer or card payment; excluded from income and spending."],
-                        evidence=["movement.explicit"])
+        return Decision(
+            "transfer",
+            "transfer",
+            99,
+            False,
+            ["Explicit account transfer or card payment; excluded from income and spending."],
+            evidence=["movement.explicit"],
+        )
     if PAYOUT.search(text) and amount_minor > 0:
-        return Decision("income", "income", 97, False,
-                        ["An explicit client payment or processor payout is money received."],
-                        evidence=["income.payout"])
+        return Decision(
+            "income",
+            "income",
+            97,
+            False,
+            ["An explicit client payment or processor payout is money received."],
+            evidence=["income.payout"],
+        )
 
     matches = [rule for rule, pattern in COMPILED_RULES if pattern.search(text)]
     categories = {rule.category for rule in matches}
@@ -142,37 +176,83 @@ def decide(description: str, amount_minor: int, learned: dict | None = None) -> 
     flow = "refund" if amount_minor > 0 and (matches or refund_marker) else base_flow
 
     if refund_marker and amount_minor < 0:
-        return Decision("uncategorized", "expense", 0, True,
-                        ["Refund wording conflicts with an outgoing amount. Check the statement's sign convention."])
+        return Decision(
+            "uncategorized",
+            "expense",
+            0,
+            True,
+            ["Refund wording conflicts with an outgoing amount. Check the statement's sign convention."],
+        )
 
     if learned and learned.get("merchant_key") == key and learned.get("direction") == base_flow:
         category = learned["category"]
-        learned_flow = "transfer" if category == "transfer" else (
-            "income" if category == "income" else ("refund" if amount_minor > 0 else "expense")
+        learned_flow = (
+            "transfer"
+            if category == "transfer"
+            else ("income" if category == "income" else ("refund" if amount_minor > 0 else "expense"))
         )
-        return Decision(category, learned_flow, 100, False,
-                        ["Matches your exact merchant rule for this money direction."],
-                        source="rule", evidence=[f"user:{key}:{base_flow}"])
+        return Decision(
+            category,
+            learned_flow,
+            100,
+            False,
+            ["Matches your exact merchant rule for this money direction."],
+            source="rule",
+            evidence=[f"user:{key}:{base_flow}"],
+        )
+
+    if BROAD_RETAILER.search(key):
+        return Decision(
+            "uncategorized",
+            "refund" if refund_marker and amount_minor > 0 else base_flow,
+            0,
+            True,
+            ["A broad retailer does not identify what was purchased. Your context is needed."],
+            evidence=["merchant.broad-retailer"],
+        )
 
     if len(categories) > 1:
-        return Decision("uncategorized", flow, 0, True,
-                        ["The description contains conflicting category signals. Choose the correct category."],
-                        evidence=[r.id for r in matches])
+        return Decision(
+            "uncategorized",
+            flow,
+            0,
+            True,
+            ["The description contains conflicting category signals. Choose the correct category."],
+            evidence=[r.id for r in matches],
+        )
     if matches:
         best = max(matches, key=lambda rule: rule.score)
         reasons = [f"Matched {best.id.replace('.', ' / ').replace('-', ' ')}."]
         if best.review:
             reasons.append("Business purpose cannot be inferred from a merchant. Confirm this expense.")
         if flow == "refund":
-            reasons.append("Money returned by this merchant reduces this category's expenses; it is not income.")
-        return Decision(best.category, flow, best.score, best.review, reasons,
-                        evidence=[r.id for r in matches])
+            reasons.append(
+                "Money returned by this merchant reduces this category's expenses; it is not income."
+            )
+        return Decision(
+            best.category, flow, best.score, best.review, reasons, evidence=[r.id for r in matches]
+        )
 
     if refund_marker and amount_minor > 0:
-        return Decision("uncategorized", "refund", 0, True,
-                        ["Refund detected, but the original spending category is unknown."])
+        return Decision(
+            "uncategorized",
+            "refund",
+            0,
+            True,
+            ["Refund detected, but the original spending category is unknown."],
+        )
     if amount_minor > 0:
-        return Decision("uncategorized", "income", 0, True,
-                        ["Unexplained credit: it could be income, a refund, or a transfer."])
-    return Decision("uncategorized", "expense", 0, True,
-                    ["No specific merchant evidence. Broad retailers and payment intermediaries need your context."])
+        return Decision(
+            "uncategorized",
+            "income",
+            0,
+            True,
+            ["Unexplained credit: it could be income, a refund, or a transfer."],
+        )
+    return Decision(
+        "uncategorized",
+        "expense",
+        0,
+        True,
+        ["No specific merchant evidence. Broad retailers and payment intermediaries need your context."],
+    )

@@ -50,7 +50,7 @@ def money(value: str, *, decimal_separator: str = ".") -> int:
     negative = raw.startswith("(") and raw.endswith(")")
     suffix = re.search(r"\s*(CR|DR)$", raw, re.I)
     if suffix:
-        raw = raw[:suffix.start()].strip()
+        raw = raw[: suffix.start()].strip()
     raw = re.sub(r"^(?:USD|GBP|EUR|CAD|AUD|PKR)\s*", "", raw, flags=re.I)
     raw = re.sub(r"[$£€]", "", raw).strip()
     if negative:
@@ -102,11 +102,22 @@ def header_map(row: list[str]) -> dict[str, int]:
 
 
 def is_header(mapping: dict) -> bool:
-    return "date" in mapping and "description" in mapping and bool({"amount", "debit", "credit"} & mapping.keys())
+    return (
+        "date" in mapping
+        and "description" in mapping
+        and bool({"amount", "debit", "credit"} & mapping.keys())
+    )
 
 
-def parse_table(table: list[list[str]], *, currency: str, date_order: str, convention: str,
-                decimal_separator: str = ".", start_line: int = 1) -> list[ParsedRow]:
+def parse_table(
+    table: list[list[str]],
+    *,
+    currency: str,
+    date_order: str,
+    convention: str,
+    decimal_separator: str = ".",
+    start_line: int = 1,
+) -> list[ParsedRow]:
     header_index, mapping = -1, {}
     for index, row in enumerate(table[:25]):
         candidate = header_map(row)
@@ -120,7 +131,7 @@ def parse_table(table: list[list[str]], *, currency: str, date_order: str, conve
     result = []
     errors = []
     width = len(table[header_index])
-    for index, values in enumerate(table[header_index + 1:], header_index + 1):
+    for index, values in enumerate(table[header_index + 1 :], header_index + 1):
         line = index + start_line
         if not any(str(v or "").strip() for v in values):
             continue
@@ -142,9 +153,16 @@ def parse_table(table: list[list[str]], *, currency: str, date_order: str, conve
             row_currency = cell("currency").upper() or currency
             if row_currency not in CURRENCIES:
                 raise ParseError(f"Unsupported currency '{row_currency}'.")
+            for amount_text in (cell("amount"), cell("debit"), cell("credit")):
+                marker = re.search(r"\b(USD|GBP|EUR|CAD|AUD|PKR)(?=\s*[-+($£€\d])", amount_text, re.I)
+                if marker and marker.group(1).upper() != row_currency:
+                    raise ParseError("Amount currency conflicts with the Currency column or import setting.")
+                for symbol, allowed in (("£", {"GBP"}), ("€", {"EUR"}), ("$", {"USD", "CAD", "AUD"})):
+                    if symbol in amount_text and row_currency not in allowed:
+                        raise ParseError(f"The {symbol} symbol conflicts with currency {row_currency}.")
             if "amount" in mapping:
                 amount = money(cell("amount"), decimal_separator=decimal_separator)
-                if convention == "card":
+                if convention == "card" and not re.search(r"(?:CR|DR)\s*$", cell("amount"), re.I):
                     amount = -amount
             else:
                 debit = money(cell("debit"), decimal_separator=decimal_separator) if cell("debit") else 0
@@ -163,8 +181,11 @@ def parse_table(table: list[list[str]], *, currency: str, date_order: str, conve
         except ParseError as exc:
             errors.append(f"Row {line}: {exc}")
     if errors:
-        raise ParseError("No rows imported. " + " ".join(errors[:8]) +
-                         (f" ({len(errors)} invalid rows in total.)" if len(errors) > 8 else ""))
+        raise ParseError(
+            "No rows imported. "
+            + " ".join(errors[:8])
+            + (f" ({len(errors)} invalid rows in total.)" if len(errors) > 8 else "")
+        )
     return result
 
 
@@ -217,26 +238,38 @@ def parse_pdf(data: bytes, **options) -> ParsedStatement:
                     candidates = []
                     for line in text.splitlines():
                         if re.match(r"^\d{4}-\d{2}-\d{2}\s", line):
-                            match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([+-]?[$£€]?[\d,]+\.\d{2})", line)
+                            match = re.fullmatch(
+                                r"(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([+-]?[$£€]?[\d,]+\.\d{2})", line
+                            )
                             if not match:
-                                raise ParseError(f"Page {page_number}: unreadable transaction line. Use a CSV export.")
+                                raise ParseError(
+                                    f"Page {page_number}: unreadable transaction line. Use a CSV export."
+                                )
                             candidates.append(list(match.groups()))
                     if candidates:
                         rows.extend(parse_table([["Date", "Description", "Amount"], *candidates], **options))
                     elif not text.strip():
-                        raise ParseError(f"Page {page_number} is scanned or empty. Export a text PDF or CSV; OCR is not supported.")
+                        raise ParseError(
+                            f"Page {page_number} is scanned or empty. Export a text PDF or CSV; OCR is not supported."
+                        )
                     else:
-                        warnings.append(f"Page {page_number} had no supported transaction table. Compare the import with the original.")
+                        warnings.append(
+                            f"Page {page_number} had no supported transaction table. Compare the import with the original."
+                        )
     except ParseError:
         raise
     except Exception as exc:
-        raise ParseError("Could not read this PDF. It may be encrypted, damaged, or unsupported. Try CSV.") from exc
+        raise ParseError(
+            "Could not read this PDF. It may be encrypted, damaged, or unsupported. Try CSV."
+        ) from exc
     return validate(rows, warnings)
 
 
 def validate(rows: list[ParsedRow], warnings: list[str]) -> ParsedStatement:
     if not rows:
-        raise ParseError("No transactions found. Use a CSV export or a PDF with a supported transaction table.")
+        raise ParseError(
+            "No transactions found. Use a CSV export or a PDF with a supported transaction table."
+        )
     if len(rows) > MAX_ROWS:
         raise ParseError(f"Maximum {MAX_ROWS:,} transactions per statement; split this file.")
     if len({r.currency for r in rows}) != 1:

@@ -22,6 +22,7 @@ from app.storage import connect, initialize, transaction_dict
 
 ROOT = Path(__file__).resolve().parents[2]
 MAX_BYTES = 10 * 1024 * 1024
+MAX_SAFE_MINOR = 2**53 - 1  # Keep every API monetary integer exact in JavaScript too.
 
 
 def uid() -> str:
@@ -62,23 +63,31 @@ def summarize(rows: list[dict], currency: str) -> dict:
         return {
             "spending_minor": -sum(r["amount_minor"] for r in source if r["category"] in EXPENSE_CATEGORIES),
             "income_minor": sum(r["amount_minor"] for r in source if r["category"] == "income"),
-            "transfer_out_minor": -sum(r["amount_minor"] for r in source
-                                      if r["category"] == "transfer" and r["amount_minor"] < 0),
-            "transfer_in_minor": sum(r["amount_minor"] for r in source
-                                     if r["category"] == "transfer" and r["amount_minor"] > 0),
+            "transfer_out_minor": -sum(
+                r["amount_minor"] for r in source if r["category"] == "transfer" and r["amount_minor"] < 0
+            ),
+            "transfer_in_minor": sum(
+                r["amount_minor"] for r in source if r["category"] == "transfer" and r["amount_minor"] > 0
+            ),
         }
 
     groups = []
     for key, category in CATEGORIES.items():
         members = [r for r in active if r["category"] == key]
-        groups.append({
-            "id": key, **category, "count": len(members),
-            "net_minor": sum(r["amount_minor"] for r in members),
-            "review_count": sum(r["needs_review"] for r in members),
-            "confirmed_net_minor": sum(r["amount_minor"] for r in members if not r["needs_review"]),
-        })
+        groups.append(
+            {
+                "id": key,
+                **category,
+                "count": len(members),
+                "net_minor": sum(r["amount_minor"] for r in members),
+                "review_count": sum(r["needs_review"] for r in members),
+                "confirmed_net_minor": sum(r["amount_minor"] for r in members if not r["needs_review"]),
+            }
+        )
     return {
-        "currency": currency, "total": len(rows), "review_count": sum(r["needs_review"] for r in rows),
+        "currency": currency,
+        "total": len(rows),
+        "review_count": sum(r["needs_review"] for r in rows),
         "ready_count": sum(not r["needs_review"] for r in rows),
         "excluded_count": sum(not r["included"] for r in rows),
         "refund_minor": sum(r["amount_minor"] for r in active if r["flow"] == "refund"),
@@ -86,9 +95,12 @@ def summarize(rows: list[dict], currency: str) -> dict:
         "cash_out_minor": -sum(r["amount_minor"] for r in active if r["amount_minor"] < 0),
         "net_movement_minor": sum(r["amount_minor"] for r in active),
         "unresolved_net_minor": sum(r["amount_minor"] for r in active if r["needs_review"]),
-        "unclassified_credits_minor": sum(r["amount_minor"] for r in active
-                                          if r["category"] == "uncategorized" and r["amount_minor"] > 0),
-        "confirmed": totals(accepted), "provisional": totals(active), "categories": groups,
+        "unclassified_credits_minor": sum(
+            r["amount_minor"] for r in active if r["category"] == "uncategorized" and r["amount_minor"] > 0
+        ),
+        "confirmed": totals(accepted),
+        "provisional": totals(active),
+        "categories": groups,
     }
 
 
@@ -109,8 +121,13 @@ def create_app(db_path: str | None = None) -> FastAPI:
         # This is a local single-user app. Reject cross-origin mutations, including localhost CSRF.
         origin = request.headers.get("origin")
         if request.method not in {"GET", "HEAD", "OPTIONS"} and origin:
-            allowed = {str(request.base_url).rstrip("/"), "http://127.0.0.1:5173", "http://localhost:5173",
-                       "http://127.0.0.1:4173", "http://localhost:4173"}
+            allowed = {
+                str(request.base_url).rstrip("/"),
+                "http://127.0.0.1:5173",
+                "http://localhost:5173",
+                "http://127.0.0.1:4173",
+                "http://localhost:4173",
+            }
             if origin not in allowed:
                 return Response("Cross-origin request rejected", status_code=403)
         if request.method == "POST" and request.headers.get("content-length", "0").isdigit():
@@ -135,14 +152,36 @@ def create_app(db_path: str | None = None) -> FastAPI:
             db.execute("BEGIN IMMEDIATE")
             duplicate_file = db.execute("SELECT id FROM statements WHERE sha=?", (sha,)).fetchone()
             if duplicate_file:
-                raise HTTPException(409, {"message": "This statement is already imported.",
-                                          "statement_id": duplicate_file["id"]})
-            db.execute("INSERT INTO statements VALUES (?,?,?,?,?,?,?,?,?)", (
-                statement_id, Path(filename.replace("\\", "/")).name[:200], sha, rows[0].currency,
-                min(r.date for r in rows), max(r.date for r in rows), len(rows), json.dumps(parsed.warnings), now(),
-            ))
+                raise HTTPException(
+                    409,
+                    {"message": "This statement is already imported.", "statement_id": duplicate_file["id"]},
+                )
+            existing_movement = db.execute(
+                "SELECT COALESCE(SUM(ABS(amount_minor)),0) FROM transactions WHERE currency=?",
+                (rows[0].currency,),
+            ).fetchone()[0]
+            if existing_movement + sum(abs(row.amount_minor) for row in rows) > MAX_SAFE_MINOR:
+                raise HTTPException(
+                    422, "Combined amounts exceed the supported currency range. Use a separate workspace."
+                )
+            db.execute(
+                "INSERT INTO statements VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    statement_id,
+                    Path(filename.replace("\\", "/")).name[:200],
+                    sha,
+                    rows[0].currency,
+                    min(r.date for r in rows),
+                    max(r.date for r in rows),
+                    len(rows),
+                    json.dumps(parsed.warnings),
+                    now(),
+                ),
+            )
             known = {r[0] for r in db.execute("SELECT fingerprint FROM transactions")}
-            learned_rules = {(r["merchant_key"], r["direction"]): dict(r) for r in db.execute("SELECT * FROM rules")}
+            learned_rules = {
+                (r["merchant_key"], r["direction"]): dict(r) for r in db.execute("SELECT * FROM rules")
+            }
             duplicate_count = 0
             # Purchases precede refunds on a shared date, irrespective of CSV sort order.
             for row in sorted(rows, key=lambda r: (r.date, r.amount_minor > 0, r.line)):
@@ -150,11 +189,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 direction = "expense" if row.amount_minor < 0 else "income"
                 decision = decide(row.description, row.amount_minor, learned_rules.get((key, direction)))
                 if decision.category == "uncategorized" and decision.flow == "refund":
-                    originals = [dict(r) for r in db.execute(
-                        """SELECT id,category,amount_minor FROM transactions WHERE merchant_key=? AND currency=?
+                    originals = [
+                        dict(r)
+                        for r in db.execute(
+                            """SELECT id,category,amount_minor FROM transactions WHERE merchant_key=? AND currency=?
                            AND date<=? AND amount_minor<0 AND needs_review=0 AND included=1
-                           AND duplicate=0 AND flow='expense'""", (key, row.currency, row.date),
-                    )]
+                           AND duplicate=0 AND flow='expense'""",
+                            (key, row.currency, row.date),
+                        )
+                    ]
                     refunded = db.execute(
                         """SELECT COALESCE(SUM(amount_minor),0) FROM transactions WHERE merchant_key=?
                            AND currency=? AND date<=? AND flow='refund' AND needs_review=0 AND included=1""",
@@ -166,20 +209,44 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 reasons = list(decision.reasons)
                 if duplicate:
                     duplicate_count += 1
-                    reasons.append("Possible duplicate: same date, original description, amount and currency. Keep or exclude explicitly.")
+                    reasons.append(
+                        "Possible duplicate: same date, original description, amount and currency. Keep or exclude explicitly."
+                    )
                 if parsed.warnings:
                     reasons.append("PDF extraction needs reconciliation with the original statement.")
-                db.execute("""INSERT INTO transactions
+                db.execute(
+                    """INSERT INTO transactions
                     (id,statement_id,date,description,merchant_key,amount_minor,currency,line,fingerprint,
                      category,flow,confidence,needs_review,reasons,evidence,source,engine_version,duplicate)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                    uid(), statement_id, row.date, row.description, key, row.amount_minor, row.currency,
-                    row.line, row.fingerprint, decision.category, decision.flow, decision.confidence,
-                    int(decision.needs_review or duplicate or bool(parsed.warnings)), json.dumps(reasons),
-                    json.dumps(decision.evidence), decision.source, ENGINE_VERSION, int(duplicate),
-                ))
-        return {"statement_id": statement_id, "row_count": len(rows), "duplicate_count": duplicate_count,
-                "warnings": parsed.warnings}
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        uid(),
+                        statement_id,
+                        row.date,
+                        row.description,
+                        key,
+                        row.amount_minor,
+                        row.currency,
+                        row.line,
+                        row.fingerprint,
+                        decision.category,
+                        decision.flow,
+                        decision.confidence,
+                        int(decision.needs_review or duplicate or bool(parsed.warnings)),
+                        json.dumps(reasons),
+                        json.dumps(decision.evidence),
+                        decision.source,
+                        ENGINE_VERSION,
+                        int(duplicate),
+                    ),
+                )
+        return {
+            "statement_id": statement_id,
+            "currency": rows[0].currency,
+            "row_count": len(rows),
+            "duplicate_count": duplicate_count,
+            "warnings": parsed.warnings,
+        }
 
     @app.post("/api/statements", status_code=201)
     async def upload(
@@ -202,9 +269,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if not data:
             raise HTTPException(422, "The uploaded file is empty.")
         try:
-            parsed = await run_in_threadpool(parse_csv if extension == ".csv" else parse_pdf, data,
-                                             currency=currency, date_order=date_order, convention=convention,
-                                             decimal_separator=decimal_separator)
+            parsed = await run_in_threadpool(
+                parse_csv if extension == ".csv" else parse_pdf,
+                data,
+                currency=currency,
+                date_order=date_order,
+                convention=convention,
+                decimal_separator=decimal_separator,
+            )
             return await run_in_threadpool(insert_statement, data, filename, parsed)
         except ParseError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -221,10 +293,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
             if not statement:
                 raise HTTPException(404, "Statement not found.")
             currency = statement["currency"]
-            result = db.execute("SELECT * FROM transactions WHERE statement_id=? ORDER BY date DESC,rowid DESC",
-                                (statement_id,))
+            result = db.execute(
+                "SELECT * FROM transactions WHERE statement_id=? ORDER BY date DESC,rowid DESC",
+                (statement_id,),
+            )
         else:
-            result = db.execute("SELECT * FROM transactions WHERE currency=? ORDER BY date DESC,rowid DESC", (currency,))
+            result = db.execute(
+                "SELECT * FROM transactions WHERE currency=? ORDER BY date DESC,rowid DESC", (currency,)
+            )
         return [transaction_dict(r) for r in result], currency
 
     @app.get("/api/workspace")
@@ -235,9 +311,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 statement["warnings"] = json.loads(statement["warnings"])
             rows, selected_currency = scoped_rows(db, statement_id, currency)
             rules = [dict(r) for r in db.execute("SELECT * FROM rules ORDER BY created_at DESC")]
-        return {"statements": statements, "transactions": rows, "summary": summarize(rows, selected_currency),
-                "rules": rules, "categories": [{"id": key, **value} for key, value in CATEGORIES.items()],
-                "currencies": sorted({r["currency"] for r in statements}), "engine_version": ENGINE_VERSION}
+        return {
+            "statements": statements,
+            "transactions": rows,
+            "summary": summarize(rows, selected_currency),
+            "rules": rules,
+            "categories": [{"id": key, **value} for key, value in CATEGORIES.items()],
+            "currencies": sorted({r["currency"] for r in statements}),
+            "engine_version": ENGINE_VERSION,
+        }
 
     def apply_review(db, transaction_id, body: Review):
         raw = db.execute("SELECT * FROM transactions WHERE id=?", (transaction_id,)).fetchone()
@@ -260,21 +342,41 @@ def create_app(db_path: str | None = None) -> FastAPI:
         reasons = ["Confirmed by you."]
         if not body.included:
             reasons.append("Excluded from all totals and category summaries.")
-        db.execute("""UPDATE transactions SET category=?,flow=?,needs_review=0,confidence=100,source='user',
-                      reasons=?,note=?,included=?,version=version+1 WHERE id=?""", (
-            body.category, body.flow, json.dumps(reasons), body.note.strip(), int(body.included), transaction_id,
-        ))
+        db.execute(
+            """UPDATE transactions SET category=?,flow=?,needs_review=0,confidence=100,source='user',
+                      reasons=?,note=?,included=?,version=version+1 WHERE id=?""",
+            (
+                body.category,
+                body.flow,
+                json.dumps(reasons),
+                body.note.strip(),
+                int(body.included),
+                transaction_id,
+            ),
+        )
         if body.remember:
             if before["duplicate"] or amount == 0 or not before["merchant_key"]:
                 raise HTTPException(422, "Duplicate and zero-value rows cannot create merchant rules.")
             direction = "expense" if amount < 0 else "income"
-            db.execute("""INSERT INTO rules VALUES (?,?,?,?,?) ON CONFLICT(merchant_key,direction)
+            db.execute(
+                """INSERT INTO rules VALUES (?,?,?,?,?) ON CONFLICT(merchant_key,direction)
                           DO UPDATE SET category=excluded.category,created_at=excluded.created_at""",
-                       (uid(), before["merchant_key"], direction, body.category, now()))
-        after = transaction_dict(db.execute("SELECT * FROM transactions WHERE id=?", (transaction_id,)).fetchone())
-        db.execute("INSERT INTO audit VALUES (?,?,?,?,?,?)", (
-            uid(), transaction_id, "review", json.dumps(before), json.dumps(after), now(),
-        ))
+                (uid(), before["merchant_key"], direction, body.category, now()),
+            )
+        after = transaction_dict(
+            db.execute("SELECT * FROM transactions WHERE id=?", (transaction_id,)).fetchone()
+        )
+        db.execute(
+            "INSERT INTO audit VALUES (?,?,?,?,?,?)",
+            (
+                uid(),
+                transaction_id,
+                "review",
+                json.dumps(before),
+                json.dumps(after),
+                now(),
+            ),
+        )
         return after
 
     @app.patch("/api/transactions/{transaction_id}")
@@ -303,15 +405,28 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     raise HTTPException(404, "Transaction not found.")
                 if row["duplicate"]:
                     raise HTTPException(422, "Review possible duplicates individually.")
-                flow = "transfer" if body.category == "transfer" else (
-                    "income" if body.category == "income" else (
-                        "refund" if row["amount_minor"] > 0 else "expense"
+                flow = (
+                    "transfer"
+                    if body.category == "transfer"
+                    else (
+                        "income"
+                        if body.category == "income"
+                        else ("refund" if row["amount_minor"] > 0 else "expense")
                     )
                 )
-                updated.append(apply_review(db, transaction_id, Review(
-                    category=body.category, flow=flow, version=item["version"],
-                    included=bool(row["included"]), note=row["note"],
-                )))
+                updated.append(
+                    apply_review(
+                        db,
+                        transaction_id,
+                        Review(
+                            category=body.category,
+                            flow=flow,
+                            version=item["version"],
+                            included=bool(row["included"]),
+                            note=row["note"],
+                        ),
+                    )
+                )
         return {"updated": len(updated)}
 
     @app.get("/api/transactions/{transaction_id}/history")
@@ -319,8 +434,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
         with connect(database) as db:
             if not db.execute("SELECT 1 FROM transactions WHERE id=?", (transaction_id,)).fetchone():
                 raise HTTPException(404, "Transaction not found.")
-            result = [dict(r) for r in db.execute(
-                "SELECT * FROM audit WHERE transaction_id=? ORDER BY created_at DESC", (transaction_id,))]
+            result = [
+                dict(r)
+                for r in db.execute(
+                    "SELECT * FROM audit WHERE transaction_id=? ORDER BY created_at DESC", (transaction_id,)
+                )
+            ]
         for row in result:
             row["before"] = json.loads(row.pop("before_json"))
             row["after"] = json.loads(row.pop("after_json"))
@@ -333,10 +452,20 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 raise HTTPException(404, "Rule not found.")
         return Response(status_code=204)
 
+    @app.delete("/api/statements/{statement_id}", status_code=204)
+    def delete_statement(statement_id: str):
+        with connect(database) as db:
+            if not db.execute("DELETE FROM statements WHERE id=?", (statement_id,)).rowcount:
+                raise HTTPException(404, "Statement not found.")
+        return Response(status_code=204)
+
     @app.get("/api/export")
-    def export(statement_id: str | None = None, currency: str = "USD",
-               kind: Literal["transactions", "summary"] = "transactions",
-               confirmed_only: bool = False):
+    def export(
+        statement_id: str | None = None,
+        currency: str = "USD",
+        kind: Literal["transactions", "summary"] = "transactions",
+        confirmed_only: bool = False,
+    ):
         with connect(database) as db:
             rows, selected_currency = scoped_rows(db, statement_id, currency)
         if confirmed_only:
@@ -344,31 +473,76 @@ def create_app(db_path: str | None = None) -> FastAPI:
         stream = io.StringIO(newline="")
         writer = csv.writer(stream)
         if kind == "summary":
-            writer.writerow(["Category", "Currency", "Net amount", "Transactions", "Needs review", "Confirmed net amount"])
+            writer.writerow(
+                ["Category", "Currency", "Net amount", "Transactions", "Needs review", "Confirmed net amount"]
+            )
             for group in summarize(rows, selected_currency)["categories"]:
-                writer.writerow([group["name"], selected_currency, decimal_amount(group["net_minor"]),
-                                 group["count"], group["review_count"], decimal_amount(group["confirmed_net_minor"])])
+                writer.writerow(
+                    [
+                        group["name"],
+                        selected_currency,
+                        decimal_amount(group["net_minor"]),
+                        group["count"],
+                        group["review_count"],
+                        decimal_amount(group["confirmed_net_minor"]),
+                    ]
+                )
         else:
-            writer.writerow(["Date", "Description", "Amount", "Currency", "Category", "Flow", "Status",
-                             "Included", "Confidence score", "Reason", "Note", "Engine version", "Source row"])
+            writer.writerow(
+                [
+                    "Date",
+                    "Description",
+                    "Amount",
+                    "Currency",
+                    "Category",
+                    "Flow",
+                    "Status",
+                    "Included",
+                    "Confidence score",
+                    "Reason",
+                    "Note",
+                    "Engine version",
+                    "Source row",
+                ]
+            )
             for row in rows:
-                values = [row["date"], row["description"], decimal_amount(row["amount_minor"]), row["currency"],
-                          CATEGORIES[row["category"]]["name"], row["flow"],
-                          "Needs review" if row["needs_review"] else "Confirmed" if row["source"] == "user" else "Categorized",
-                          "Yes" if row["included"] else "No", row["confidence"], " ".join(row["reasons"]),
-                          row["note"], row["engine_version"], row["line"]]
+                values = [
+                    row["date"],
+                    row["description"],
+                    decimal_amount(row["amount_minor"]),
+                    row["currency"],
+                    CATEGORIES[row["category"]]["name"],
+                    row["flow"],
+                    "Needs review"
+                    if row["needs_review"]
+                    else "Confirmed"
+                    if row["source"] == "user"
+                    else "Categorized",
+                    "Yes" if row["included"] else "No",
+                    row["confidence"],
+                    " ".join(row["reasons"]),
+                    row["note"],
+                    row["engine_version"],
+                    row["line"],
+                ]
                 # Only free text is escaped: numeric amounts remain usable in spreadsheets.
                 for index in (1, 9, 10):
                     if str(values[index]).lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
                         values[index] = "'" + str(values[index])
                 writer.writerow(values)
-        return Response(stream.getvalue().encode("utf-8-sig"), media_type="text/csv",
-                        headers={"Content-Disposition": f'attachment; filename="folio-{kind}-{selected_currency}.csv"'})
+        return Response(
+            stream.getvalue().encode("utf-8-sig"),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="folio-{kind}-{selected_currency}.csv"'},
+        )
 
     @app.get("/api/sample")
     def sample():
-        return Response((ROOT / "samples" / "creative-studio-october.csv").read_bytes(), media_type="text/csv",
-                        headers={"Content-Disposition": 'attachment; filename="creative-studio-october.csv"'})
+        return Response(
+            (ROOT / "samples" / "creative-studio-october.csv").read_bytes(),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="creative-studio-october.csv"'},
+        )
 
     dist = ROOT / "frontend" / "dist"
     if dist.exists():
