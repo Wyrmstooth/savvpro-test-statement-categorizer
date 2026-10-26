@@ -7,12 +7,14 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from typing import Literal, get_args
 
 import pdfplumber
 
 MAX_ROWS = 10000
 MAX_PAGES = 40
-CURRENCIES = {"USD", "GBP", "EUR", "CAD", "AUD", "PKR"}
+Currency = Literal["USD", "GBP", "EUR", "CAD", "AUD", "PKR"]
+CURRENCIES = set(get_args(Currency))
 ALIASES = {
     "date": {"date", "transaction date", "posting date", "posted date", "post date", "trans date"},
     "description": {
@@ -69,33 +71,46 @@ class ParsedStatement:
     warnings: list[str]
 
 
-def money(value: str, *, decimal_separator: str = ".") -> int:
+def money(value: str, *, decimal_separator: str = ".", currency: str | None = None) -> int:
     raw = value.strip().replace("\u00a0", " ")
     if not raw:
         raise ParseError("Missing amount.")
+    if decimal_separator not in {".", ","}:
+        raise ParseError("Unsupported decimal separator.")
     negative = raw.startswith("(") and raw.endswith(")")
-    suffix = re.search(r"\s*(CR|DR)$", raw, re.I)
-    if suffix:
-        raw = raw[: suffix.start()].strip()
-    raw = re.sub(r"^(?:USD|GBP|EUR|CAD|AUD|PKR)\s*", "", raw, flags=re.I)
-    raw = re.sub(r"[$£€]", "", raw).strip()
-    raw = re.sub(r"^([+-])\s+(?=\d)", r"\1", raw)
     if negative:
-        raw = raw[1:-1]
-    # Validate grouping before removing it; malformed numbers are never silently changed.
+        raw = raw[1:-1].strip()
     thousands = "," if decimal_separator == "." else "."
     escaped_sep, escaped_group = re.escape(decimal_separator), re.escape(thousands)
-    pattern = rf"[+-]?(?:\d+|\d{{1,3}}(?:{escaped_group}\d{{3}})+)(?:{escaped_sep}\d{{1,2}})?"
-    if not re.fullmatch(pattern, raw):
+    number_pattern = rf"(?:[0-9]+|[0-9]{{1,3}}(?:{escaped_group}[0-9]{{3}})+)(?:{escaped_sep}[0-9]{{1,2}})?"
+    match = re.fullmatch(
+        rf"(?P<first>[+\-−])?\s*(?P<marker>USD|GBP|EUR|CAD|AUD|PKR|[$£€])?\s*"
+        rf"(?P<second>[+\-−])?\s*(?P<number>{number_pattern})\s*(?P<direction>CR|DR)?",
+        raw,
+        re.I,
+    )
+    if not match or (match["first"] and match["second"]):
         raise ParseError(f"Invalid amount '{value[:60]}'. Use at most two decimal places.")
+    sign = match["first"] or match["second"]
+    if negative and sign:
+        raise ParseError("Use a single amount sign or accounting parentheses.")
+    negative = negative or sign in {"-", "−"}
+    direction = (match["direction"] or "").upper()
+    if direction == "CR" and negative or direction == "DR" and sign == "+":
+        raise ParseError("Credit/debit marker conflicts with the amount sign.")
+    marker = (match["marker"] or "").upper()
+    if currency and marker:
+        allowed = {"$": {"USD", "CAD", "AUD"}, "£": {"GBP"}, "€": {"EUR"}}.get(marker, {marker})
+        if currency not in allowed:
+            raise ParseError("Amount currency conflicts with the Currency column or import setting.")
     try:
-        number = Decimal(raw.replace(thousands, "").replace(decimal_separator, "."))
+        number = Decimal(match["number"].replace(thousands, "").replace(decimal_separator, "."))
     except InvalidOperation as exc:
         raise ParseError("Invalid amount.") from exc
     if negative:
         number = -abs(number)
-    if suffix:
-        number = abs(number) * (-1 if suffix.group(1).upper() == "DR" else 1)
+    if direction:
+        number = abs(number) * (-1 if direction == "DR" else 1)
     if abs(number) > Decimal("999999999999.99"):
         raise ParseError("Amount exceeds the supported limit.")
     return int(number * 100)
@@ -168,6 +183,7 @@ def parse_table(
     running_balance = None
     closing_balance = None
     declared_totals = None
+    table_currency = None
     width = len(table[header_index])
     for index, values in enumerate(table[header_index + 1 :], header_index + 1):
         line = index + start_line
@@ -188,10 +204,22 @@ def parse_table(
             if not description or len(description) > 500:
                 raise ParseError("Description must contain 1–500 characters.")
             amount_cells = (cell("amount"), cell("debit"), cell("credit"))
+            row_currency = cell("currency").upper() or table_currency or currency
+            if row_currency not in CURRENCIES:
+                raise ParseError(f"Unsupported currency '{row_currency}'.")
+            if table_currency and row_currency != table_currency:
+                raise ParseError("Mixed currencies cannot be reconciled in one statement.")
+            table_currency = row_currency
+
+            def parse_money(value):
+                return money(value, decimal_separator=decimal_separator, currency=row_currency)
+
             label = description.casefold()
-            if "balance" in mapping and label in OPENING_LABELS | CLOSING_LABELS and not any(amount_cells):
+            if "balance" in mapping and label in OPENING_LABELS | CLOSING_LABELS:
+                if any(value and parse_money(value) != 0 for value in amount_cells):
+                    raise ParseError("Balance metadata must not contain a transaction amount.")
                 parse_date(cell("date"), date_order)
-                balance = money(cell("balance"), decimal_separator=decimal_separator)
+                balance = parse_money(cell("balance"))
                 if label in OPENING_LABELS:
                     if opening_balance is not None or result:
                         raise ParseError("Opening balance must appear once, before transactions.")
@@ -205,30 +233,20 @@ def parse_table(
                 if declared_totals is not None or cell("balance"):
                     raise ParseError("Ambiguous totals row.")
                 declared_totals = (
-                    money(cell("debit"), decimal_separator=decimal_separator),
-                    money(cell("credit"), decimal_separator=decimal_separator),
+                    parse_money(cell("debit")),
+                    parse_money(cell("credit")),
                 )
                 continue
             if closing_balance is not None or declared_totals is not None:
                 raise ParseError("Transaction appears after a closing balance or totals row.")
             date = parse_date(cell("date"), date_order)
-            row_currency = cell("currency").upper() or currency
-            if row_currency not in CURRENCIES:
-                raise ParseError(f"Unsupported currency '{row_currency}'.")
-            for amount_text in amount_cells:
-                marker = re.search(r"\b(USD|GBP|EUR|CAD|AUD|PKR)(?=\s*[-+($£€\d])", amount_text, re.I)
-                if marker and marker.group(1).upper() != row_currency:
-                    raise ParseError("Amount currency conflicts with the Currency column or import setting.")
-                for symbol, allowed in (("£", {"GBP"}), ("€", {"EUR"}), ("$", {"USD", "CAD", "AUD"})):
-                    if symbol in amount_text and row_currency not in allowed:
-                        raise ParseError(f"The {symbol} symbol conflicts with currency {row_currency}.")
             if "amount" in mapping:
-                amount = money(cell("amount"), decimal_separator=decimal_separator)
-                if convention == "card" and not re.search(r"(?:CR|DR)\s*$", cell("amount"), re.I):
+                amount = parse_money(cell("amount"))
+                if convention == "card" and not re.search(r"(?:CR|DR)\s*\)?$", cell("amount"), re.I):
                     amount = -amount
             else:
-                debit = money(cell("debit"), decimal_separator=decimal_separator) if cell("debit") else 0
-                credit = money(cell("credit"), decimal_separator=decimal_separator) if cell("credit") else 0
+                debit = parse_money(cell("debit")) if cell("debit") else 0
+                credit = parse_money(cell("credit")) if cell("credit") else 0
                 if debit < 0 or credit < 0:
                     raise ParseError("Debit / Credit columns must use positive values.")
                 if debit and credit:
@@ -249,7 +267,7 @@ def parse_table(
                 expected = running_balance + (
                     -amount if convention == "card" and "amount" in mapping else amount
                 )
-                reported = money(cell("balance"), decimal_separator=decimal_separator)
+                reported = parse_money(cell("balance"))
                 if expected != reported:
                     raise ParseError("Running balance does not reconcile with the transaction amount.")
                 running_balance = reported
@@ -292,7 +310,13 @@ def parse_csv(data: bytes, **options) -> ParsedStatement:
     delimiter = None
     for line in lines[:25]:
         for candidate in (",", ";", "\t"):
-            if is_header(header_map(next(csv.reader([line], delimiter=candidate)))):
+            try:
+                parsed_line = next(csv.reader([line], delimiter=candidate))
+            except csv.Error as exc:
+                raise ParseError(
+                    "CSV field is too long or malformed. Re-export the statement as CSV."
+                ) from exc
+            if is_header(header_map(parsed_line)):
                 delimiter = candidate
                 break
         if delimiter:

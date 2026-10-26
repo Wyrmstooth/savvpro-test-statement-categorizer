@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,8 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.engine import CATEGORIES, ENGINE_VERSION, EXPENSE_CATEGORIES, decide, merchant_key, resolve_refund
-from app.parser import CURRENCIES, ParseError, ParsedStatement, parse_csv, parse_pdf
+from app.engine import CATEGORIES, ENGINE_VERSION, EXPENSE_CATEGORIES, decide, merchant_key
+from app.parser import Currency, ParseError, ParsedStatement, parse_csv, parse_pdf
+from app.refunds import reconcile_refunds
 from app.storage import connect, initialize, transaction_dict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,19 +41,36 @@ def decimal_amount(minor: int) -> str:
     return f"{sign}{units}.{cents:02d}"
 
 
+def csv_text(value: str) -> str:
+    """Neutralize formula-like text; never apply this to validated numeric money cells."""
+    normalized = unicodedata.normalize("NFKC", value)
+    if normalized and unicodedata.category(normalized[0]) in {"Cc", "Cf"}:
+        return "'" + value
+    probe = normalized.lstrip()
+    while probe and unicodedata.category(probe[0]) in {"Cc", "Cf"}:
+        probe = probe[1:].lstrip()
+    return "'" + value if probe.startswith(("=", "+", "-", "@")) else value
+
+
 class Review(BaseModel):
     model_config = ConfigDict(extra="forbid")
     category: str
     flow: Literal["expense", "refund", "income", "transfer", "neutral"]
-    version: int = Field(ge=1)
-    included: bool = True
+    version: int = Field(ge=1, strict=True)
+    included: bool = Field(default=True, strict=True)
     note: str = Field(default="", max_length=500)
-    remember: bool = False
+    remember: bool = Field(default=False, strict=True)
+
+
+class BatchItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    version: int = Field(ge=1, strict=True)
 
 
 class BulkReview(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    items: list[Annotated[dict, Field()]] = Field(min_length=1, max_length=200)
+    items: list[BatchItem] = Field(min_length=1, max_length=200)
     category: str
 
 
@@ -180,30 +199,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
             )
             known = {r[0] for r in db.execute("SELECT fingerprint FROM transactions")}
             learned_rules = {
-                (r["merchant_key"], r["direction"]): dict(r) for r in db.execute("SELECT * FROM rules")
+                (r["merchant_key"], r["direction"]): dict(r)
+                for r in db.execute("SELECT * FROM rules WHERE identity_version=2")
             }
             duplicate_count = 0
+            context_candidates = []
             # Purchases precede refunds on a shared date, irrespective of CSV sort order.
             for row in sorted(rows, key=lambda r: (r.date, r.amount_minor > 0, r.line)):
                 key = merchant_key(row.description)
                 direction = "expense" if row.amount_minor < 0 else "income"
                 decision = decide(row.description, row.amount_minor, learned_rules.get((key, direction)))
-                if decision.category == "uncategorized" and decision.flow == "refund":
-                    originals = [
-                        dict(r)
-                        for r in db.execute(
-                            """SELECT id,category,amount_minor FROM transactions WHERE merchant_key=? AND currency=?
-                           AND date<=? AND amount_minor<0 AND needs_review=0 AND included=1
-                           AND duplicate=0 AND flow='expense'""",
-                            (key, row.currency, row.date),
-                        )
-                    ]
-                    refunded = db.execute(
-                        """SELECT COALESCE(SUM(amount_minor),0) FROM transactions WHERE merchant_key=?
-                           AND currency=? AND date<=? AND flow='refund' AND needs_review=0 AND included=1""",
-                        (key, row.currency, row.date),
-                    ).fetchone()[0]
-                    decision = resolve_refund(decision, row.amount_minor, originals, refunded)
                 duplicate = row.fingerprint in known
                 known.add(row.fingerprint)
                 reasons = list(decision.reasons)
@@ -214,13 +219,22 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     )
                 if parsed.warnings:
                     reasons.append("PDF extraction needs reconciliation with the original statement.")
+                transaction_id = uid()
+                if (
+                    key
+                    and decision.category == "uncategorized"
+                    and decision.flow == "refund"
+                    and not duplicate
+                    and not parsed.warnings
+                ):
+                    context_candidates.append(transaction_id)
                 db.execute(
                     """INSERT INTO transactions
                     (id,statement_id,date,description,merchant_key,amount_minor,currency,line,fingerprint,
                      category,flow,confidence,needs_review,reasons,evidence,source,engine_version,duplicate)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
-                        uid(),
+                        transaction_id,
                         statement_id,
                         row.date,
                         row.description,
@@ -240,6 +254,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                         int(duplicate),
                     ),
                 )
+            reconcile_refunds(db, context_candidates)
         return {
             "statement_id": statement_id,
             "currency": rows[0].currency,
@@ -251,14 +266,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/api/statements", status_code=201)
     async def upload(
         file: Annotated[UploadFile, File()],
-        currency: str = "USD",
+        currency: Currency = "USD",
         date_order: Literal["mdy", "dmy"] = "mdy",
         convention: Literal["bank", "card"] = "bank",
         decimal_separator: Literal[".", ","] = ".",
         statement_year: Annotated[int | None, Query(ge=1900, le=2100)] = None,
     ):
-        if currency not in CURRENCIES:
-            raise HTTPException(422, "Unsupported currency.")
         filename = file.filename or "statement"
         extension = Path(filename).suffix.lower()
         if extension not in {".csv", ".pdf"}:
@@ -310,13 +323,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return [transaction_dict(r) for r in result], currency
 
     @app.get("/api/workspace")
-    def workspace(statement_id: str | None = None, currency: str = "USD"):
+    def workspace(statement_id: str | None = None, currency: Currency = "USD"):
         with connect(database) as db:
             statements = [dict(r) for r in db.execute("SELECT * FROM statements ORDER BY created_at DESC")]
             for statement in statements:
                 statement["warnings"] = json.loads(statement["warnings"])
             rows, selected_currency = scoped_rows(db, statement_id, currency)
             rules = [dict(r) for r in db.execute("SELECT * FROM rules ORDER BY created_at DESC")]
+            for rule in rules:
+                rule["needs_confirmation"] = rule.pop("identity_version") != 2
         return {
             "statements": statements,
             "transactions": rows,
@@ -362,11 +377,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
         )
         if body.remember:
             if before["duplicate"] or amount == 0 or not before["merchant_key"]:
-                raise HTTPException(422, "Duplicate and zero-value rows cannot create merchant rules.")
+                raise HTTPException(
+                    422, "A duplicate, zero-value, or unidentified merchant cannot create a rule."
+                )
             direction = "expense" if amount < 0 else "income"
             db.execute(
-                """INSERT INTO rules VALUES (?,?,?,?,?) ON CONFLICT(merchant_key,direction)
-                          DO UPDATE SET category=excluded.category,created_at=excluded.created_at""",
+                """INSERT INTO rules (id,merchant_key,direction,category,created_at,identity_version)
+                       VALUES (?,?,?,?,?,2) ON CONFLICT(merchant_key,direction)
+                       DO UPDATE SET category=excluded.category,created_at=excluded.created_at,identity_version=2""",
                 (uid(), before["merchant_key"], direction, body.category, now()),
             )
         after = transaction_dict(
@@ -389,7 +407,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def review(transaction_id: str, body: Review):
         with connect(database) as db:
             db.execute("BEGIN IMMEDIATE")
-            return apply_review(db, transaction_id, body)
+            result = apply_review(db, transaction_id, body)
+            reconcile_refunds(db)
+            return result
 
     @app.post("/api/review-batch")
     def review_batch(body: BulkReview):
@@ -400,9 +420,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             updated = []
             ids = set()
             for item in body.items:
-                transaction_id = item.get("id")
-                if not isinstance(transaction_id, str) or not isinstance(item.get("version"), int):
-                    raise HTTPException(422, "Each row needs an id and version.")
+                transaction_id = item.id
                 if transaction_id in ids:
                     raise HTTPException(422, "Duplicate transaction id in batch.")
                 ids.add(transaction_id)
@@ -427,12 +445,13 @@ def create_app(db_path: str | None = None) -> FastAPI:
                         Review(
                             category=body.category,
                             flow=flow,
-                            version=item["version"],
+                            version=item.version,
                             included=bool(row["included"]),
                             note=row["note"],
                         ),
                     )
                 )
+            reconcile_refunds(db)
         return {"updated": len(updated)}
 
     @app.get("/api/transactions/{transaction_id}/history")
@@ -461,14 +480,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.delete("/api/statements/{statement_id}", status_code=204)
     def delete_statement(statement_id: str):
         with connect(database) as db:
+            db.execute("BEGIN IMMEDIATE")
             if not db.execute("DELETE FROM statements WHERE id=?", (statement_id,)).rowcount:
                 raise HTTPException(404, "Statement not found.")
+            reconcile_refunds(db)
         return Response(status_code=204)
 
     @app.get("/api/export")
     def export(
         statement_id: str | None = None,
-        currency: str = "USD",
+        currency: Currency = "USD",
         kind: Literal["transactions", "summary"] = "transactions",
         confirmed_only: bool = False,
     ):
@@ -533,8 +554,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 ]
                 # Only free text is escaped: numeric amounts remain usable in spreadsheets.
                 for index in (1, 9, 10):
-                    if str(values[index]).lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
-                        values[index] = "'" + str(values[index])
+                    values[index] = csv_text(str(values[index]))
                 writer.writerow(values)
         return Response(
             stream.getvalue().encode("utf-8-sig"),

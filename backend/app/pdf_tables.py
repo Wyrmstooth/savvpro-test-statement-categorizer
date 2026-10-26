@@ -148,7 +148,7 @@ def parse_text_tables(pdf, *, statement_year=None, **options):
             if match:
                 if period and parse_date(match[1], options["date_order"]) != period[0]:
                     raise ParseError("Opening balance date conflicts with the statement period.")
-                value = money(match[2])
+                value = money(match[2], currency=options["currency"])
                 if opening is not None and value != opening:
                     raise ParseError("Conflicting opening balances in PDF.")
                 opening = value
@@ -160,20 +160,23 @@ def parse_text_tables(pdf, *, statement_year=None, **options):
                 ending_date = re.search(r"\d{2}/\d{2}/\d{4}", raw)
                 if period and ending_date and parse_date(ending_date[0], options["date_order"]) != period[1]:
                     raise ParseError("Closing balance date conflicts with the statement period.")
-                value = money(match[1])
+                value = money(match[1], currency=options["currency"])
                 if closing is not None and value != closing:
                     raise ParseError("Conflicting closing balances in PDF.")
                 closing = value
                 continue
             match = re.fullmatch(r"Previous Balance (\$[\d,]+\.\d{2})", raw, re.I)
             if match:
-                opening = money(match[1])
+                opening = money(match[1], currency=options["currency"])
                 continue
             match = re.fullmatch(
                 r"Total withdrawals ([\d,]+\.\d{2}) Total deposits ([\d,]+\.\d{2})", raw, re.I
             )
             if match:
-                declared_totals = (money(match[1]), money(match[2]))
+                declared_totals = (
+                    money(match[1], currency=options["currency"]),
+                    money(match[2], currency=options["currency"]),
+                )
                 active = False
                 continue
             if not active or label in SECTIONS:
@@ -217,7 +220,7 @@ def parse_text_tables(pdf, *, statement_year=None, **options):
                     description.append(word["text"])
             cells["Description"] = " ".join(description)
             if is_balance_row:
-                value = money(cells["Balance"])
+                value = money(cells["Balance"], currency=options["currency"])
                 if label.startswith("opening"):
                     if opening is not None or len(table) > 1:
                         raise ParseError("Multiple opening balances or accounts found. Split the statements.")

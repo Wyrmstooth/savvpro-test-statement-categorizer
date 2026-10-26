@@ -18,7 +18,7 @@ CATEGORIES = {
     "uncategorized": {"name": "Uncategorized", "color": "#c5a86b"},
 }
 EXPENSE_CATEGORIES = set(CATEGORIES) - {"income", "transfer", "personal", "uncategorized"}
-ENGINE_VERSION = "1.1.0"
+ENGINE_VERSION = "1.2.0"
 REFUND_WORDS = r"REFUND(?:ED)?|REVERS(?:AL|ED)|RETURN(?:ED)?"
 REFUND = re.compile(rf"\b(?:{REFUND_WORDS})\b")
 
@@ -78,8 +78,9 @@ BROAD_RETAILER = re.compile(r"^(?:AMAZON|AMZN|APPLE(?:\s+COM)?|WALMART|TARGET|CO
 
 
 def normalized_text(description: str) -> str:
-    text = unicodedata.normalize("NFKD", description).encode("ascii", "ignore").decode().upper()
-    return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9]+", " ", text)).strip()
+    text = unicodedata.normalize("NFKD", description).upper()
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return " ".join("".join(char if char.isalnum() else " " for char in text).split())
 
 
 def merchant_key(description: str) -> str:
@@ -199,7 +200,7 @@ def decide(description: str, amount_minor: int, learned: dict | None = None) -> 
     categories = {rule.category for rule in matches}
     flow = "refund" if amount_minor > 0 and (matches or refund_marker) else base_flow
 
-    if learned and learned.get("merchant_key") == key and learned.get("direction") == base_flow:
+    if key and learned and learned.get("merchant_key") == key and learned.get("direction") == base_flow:
         category = learned["category"]
         learned_flow = (
             "transfer"

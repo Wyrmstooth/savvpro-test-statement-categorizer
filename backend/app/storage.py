@@ -24,8 +24,16 @@ CREATE INDEX IF NOT EXISTS ix_transaction_fingerprint ON transactions(fingerprin
 CREATE INDEX IF NOT EXISTS ix_transaction_merchant_date ON transactions(merchant_key,currency,date);
 CREATE TABLE IF NOT EXISTS rules (
     id TEXT PRIMARY KEY, merchant_key TEXT NOT NULL, direction TEXT NOT NULL,
-    category TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(merchant_key, direction)
+    category TEXT NOT NULL, created_at TEXT NOT NULL,
+    identity_version INTEGER NOT NULL DEFAULT 2, UNIQUE(merchant_key, direction)
 );
+CREATE TABLE IF NOT EXISTS refund_allocations (
+    refund_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    purchase_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    amount_minor INTEGER NOT NULL CHECK(amount_minor > 0),
+    PRIMARY KEY(refund_id,purchase_id)
+);
+CREATE INDEX IF NOT EXISTS ix_refund_purchase ON refund_allocations(purchase_id);
 CREATE TABLE IF NOT EXISTS audit (
     id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
     action TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL,
@@ -51,6 +59,13 @@ def initialize(path: str):
     with connect(path) as db:
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
+        db.execute("BEGIN IMMEDIATE")
+        if "identity_version" not in {row[1] for row in db.execute("PRAGMA table_info(rules)")}:
+            db.execute("ALTER TABLE rules ADD COLUMN identity_version INTEGER NOT NULL DEFAULT 1")
+        from app.refunds import migrate_identities, reconcile_refunds
+
+        migrate_identities(db)
+        reconcile_refunds(db)
 
 
 def transaction_dict(row) -> dict:
