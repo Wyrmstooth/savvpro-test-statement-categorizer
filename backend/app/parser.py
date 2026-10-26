@@ -15,8 +15,16 @@ MAX_PAGES = 40
 CURRENCIES = {"USD", "GBP", "EUR", "CAD", "AUD", "PKR"}
 ALIASES = {
     "date": {"date", "transaction date", "posting date", "posted date", "post date", "trans date"},
-    "description": {"description", "merchant", "payee", "details", "transaction description", "memo", "activity",
-                    "merchant name or transaction description"},
+    "description": {
+        "description",
+        "merchant",
+        "payee",
+        "details",
+        "transaction description",
+        "memo",
+        "activity",
+        "merchant name or transaction description",
+    },
     "amount": {"amount", "transaction amount", "signed amount"},
     "debit": {"debit", "debits", "withdrawal", "withdrawals", "money out", "charge", "charges"},
     "credit": {"credit", "credits", "deposit", "deposits", "money in", "payment", "payments"},
@@ -26,8 +34,16 @@ ALIASES = {
 }
 HEADER_PRIORITY = {
     "date": ("transaction date", "trans date", "date", "posting date", "posted date", "post date"),
-    "description": ("description", "transaction description", "merchant name or transaction description",
-                    "merchant", "payee", "activity", "details", "memo"),
+    "description": (
+        "description",
+        "transaction description",
+        "merchant name or transaction description",
+        "merchant",
+        "payee",
+        "activity",
+        "details",
+        "memo",
+    ),
 }
 OPENING_LABELS = {"opening balance", "beginning balance", "balance brought forward"}
 CLOSING_LABELS = {"closing balance", "ending balance", "balance carried forward"}
@@ -188,8 +204,10 @@ def parse_table(
             if label in {"total", "totals"} and not cell("date") and {"debit", "credit"} <= mapping.keys():
                 if declared_totals is not None or cell("balance"):
                     raise ParseError("Ambiguous totals row.")
-                declared_totals = (money(cell("debit"), decimal_separator=decimal_separator),
-                                   money(cell("credit"), decimal_separator=decimal_separator))
+                declared_totals = (
+                    money(cell("debit"), decimal_separator=decimal_separator),
+                    money(cell("credit"), decimal_separator=decimal_separator),
+                )
                 continue
             if closing_balance is not None or declared_totals is not None:
                 raise ParseError("Transaction appears after a closing balance or totals row.")
@@ -219,12 +237,18 @@ def parse_table(
                     raise ParseError("Missing Debit and Credit values.")
                 amount = credit - debit
             transaction_type = cell("type").casefold()
-            if transaction_type in {"sale", "purchase", "debit"} and amount > 0 or (
-                transaction_type in {"return", "refund", "credit", "deposit"} and amount < 0
+            if (
+                transaction_type in {"sale", "purchase", "debit"}
+                and amount > 0
+                or (transaction_type in {"return", "refund", "credit", "deposit"} and amount < 0)
             ):
-                raise ParseError("Amount sign conflicts with the transaction Type. Check the selected sign convention.")
+                raise ParseError(
+                    "Amount sign conflicts with the transaction Type. Check the selected sign convention."
+                )
             if running_balance is not None:
-                expected = running_balance + (-amount if convention == "card" and "amount" in mapping else amount)
+                expected = running_balance + (
+                    -amount if convention == "card" and "amount" in mapping else amount
+                )
                 reported = money(cell("balance"), decimal_separator=decimal_separator)
                 if expected != reported:
                     raise ParseError("Running balance does not reconcile with the transaction amount.")
@@ -244,8 +268,10 @@ def parse_table(
     if closing_balance is not None and running_balance != closing_balance:
         raise ParseError("Closing balance does not reconcile with the imported transactions.")
     if declared_totals is not None:
-        actual_totals = (-sum(r.amount_minor for r in result if r.amount_minor < 0),
-                         sum(r.amount_minor for r in result if r.amount_minor > 0))
+        actual_totals = (
+            -sum(r.amount_minor for r in result if r.amount_minor < 0),
+            sum(r.amount_minor for r in result if r.amount_minor > 0),
+        )
         if declared_totals != actual_totals:
             raise ParseError("Declared debit/credit totals do not reconcile with the imported transactions.")
     return result
@@ -258,7 +284,7 @@ def parse_csv(data: bytes, **options) -> ParsedStatement:
         try:
             content = data.decode("cp1252")
         except UnicodeDecodeError as exc:
-            raise ParseError("Use a UTF-8 or Windows-1252 CSV export.") from exc
+            raise ParseError("Use a UTF-8, BOM-marked UTF-16, or Windows-1252 CSV export.") from exc
     if "\x00" in content:
         raise ParseError("This does not appear to be a text CSV file.")
     lines = content.splitlines()
@@ -281,12 +307,17 @@ def parse_csv(data: bytes, **options) -> ParsedStatement:
     return validate(rows, [])
 
 
-def parse_pdf(data: bytes, **options) -> ParsedStatement:
+def parse_pdf(data: bytes, *, statement_year: int | None = None, **options) -> ParsedStatement:
     rows, warnings = [], []
     try:
         with pdfplumber.open(io.BytesIO(data)) as pdf:
             if len(pdf.pages) > MAX_PAGES:
                 raise ParseError(f"PDF exceeds {MAX_PAGES} pages; split the statement.")
+            from app.pdf_tables import parse_text_tables
+
+            adapted = parse_text_tables(pdf, statement_year=statement_year, **options)
+            if adapted is not None:
+                return validate(adapted.rows, adapted.warnings)
             for page_number, page in enumerate(pdf.pages, 1):
                 tables = page.extract_tables()
                 recognized = False

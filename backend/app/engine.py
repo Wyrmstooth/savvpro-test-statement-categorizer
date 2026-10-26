@@ -101,6 +101,8 @@ def resolve_refund(
     """
     if decision.category != "uncategorized" or decision.flow != "refund" or amount_minor <= 0:
         return decision
+    if "income.refund-conflict" in decision.evidence:
+        return decision
     if not candidates:
         return decision
     categories = {row["category"] for row in candidates}
@@ -155,13 +157,21 @@ def decide(description: str, amount_minor: int, learned: dict | None = None) -> 
     refund_marker = bool(REFUND.search(text))
     if refund_marker and amount_minor < 0:
         return Decision(
-            "uncategorized", "expense", 0, True,
+            "uncategorized",
+            "expense",
+            0,
+            True,
             ["Refund wording conflicts with an outgoing amount. Check the statement's sign convention."],
         )
     if refund_marker and PAYOUT.search(text):
         return Decision(
-            "uncategorized", "refund", 0, True,
-            ["Refund or reversal wording conflicts with a payout or client payment. Confirm the money's purpose."],
+            "uncategorized",
+            "refund",
+            0,
+            True,
+            [
+                "Refund or reversal wording conflicts with a payout or client payment. Confirm the money's purpose."
+            ],
             evidence=["income.refund-conflict"],
         )
 

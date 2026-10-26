@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -255,6 +255,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         date_order: Literal["mdy", "dmy"] = "mdy",
         convention: Literal["bank", "card"] = "bank",
         decimal_separator: Literal[".", ","] = ".",
+        statement_year: Annotated[int | None, Query(ge=1900, le=2100)] = None,
     ):
         if currency not in CURRENCIES:
             raise HTTPException(422, "Unsupported currency.")
@@ -269,13 +270,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if not data:
             raise HTTPException(422, "The uploaded file is empty.")
         try:
-            parsed = await run_in_threadpool(
-                parse_csv if extension == ".csv" else parse_pdf,
-                data,
+            parser_options = dict(
                 currency=currency,
                 date_order=date_order,
                 convention=convention,
                 decimal_separator=decimal_separator,
+            )
+            if extension == ".pdf":
+                parser_options["statement_year"] = statement_year
+            parsed = await run_in_threadpool(
+                parse_csv if extension == ".csv" else parse_pdf,
+                data,
+                **parser_options,
             )
             return await run_in_threadpool(insert_statement, data, filename, parsed)
         except ParseError as exc:
