@@ -1,0 +1,410 @@
+{
+  "captured_at_utc": "2026-10-26T14:20:23.570854+00:00",
+  "scope": "Publicly published demonstration statements and independent fictional samples; no private customer statements. Financial extraction checks, not broad categorization accuracy.",
+  "source_documents": 6,
+  "checks": 10,
+  "passed": 10,
+  "results": [
+    {
+      "id": "capital-one-sample.pdf",
+      "file": "capital-one-sample.pdf",
+      "publisher": "Capital One (official public sample)",
+      "url": "https://ecm.capitalone.com/WCM/bank/pdfs/sample-estatement.pdf",
+      "sha256": "453a0def3af36ada529c6fe324232fcc6221156081991f26060894ce89cc5e3b",
+      "params": {
+        "convention": "bank"
+      },
+      "http_status": 201,
+      "expected_rows_in_out_minor": [
+        3,
+        724,
+        0
+      ],
+      "observed_rows_in_out_minor": [
+        3,
+        724,
+        0
+      ],
+      "passed": true,
+      "review_count": 3,
+      "category_counts": {
+        "uncategorized": 3
+      },
+      "warnings": [],
+      "no_unresolved_credit_in_headline_income": true,
+      "financial_reconciliation": true
+    },
+    {
+      "id": "utilly-bank.pdf",
+      "file": "utilly-bank.pdf",
+      "publisher": "Utilly (independent fictional checking sample)",
+      "url": "https://getutilly.com/sample/bank.pdf",
+      "sha256": "738d015a58c7d4fab0bcb84bc2ecb496f7f4a954c1f51bcd7d9842e97526640e",
+      "params": {
+        "convention": "bank"
+      },
+      "http_status": 201,
+      "expected_rows_in_out_minor": [
+        31,
+        2959743,
+        2857527
+      ],
+      "observed_rows_in_out_minor": [
+        31,
+        2959743,
+        2857527
+      ],
+      "passed": true,
+      "review_count": 26,
+      "category_counts": {
+        "uncategorized": 26,
+        "fees": 1,
+        "software": 2,
+        "transfer": 1,
+        "office": 1
+      },
+      "warnings": [],
+      "no_unresolved_credit_in_headline_income": true,
+      "financial_reconciliation": true
+    },
+    {
+      "id": "utilly-card.pdf",
+      "file": "utilly-card.pdf",
+      "publisher": "Utilly (independent fictional card sample)",
+      "url": "https://getutilly.com/sample/card.pdf",
+      "sha256": "0217d5e0aad66456a02cfb8733cd7d347d5c17f01c4cdb890ff0d6baec46319f",
+      "params": {
+        "convention": "card",
+        "statement_year": 2026
+      },
+      "http_status": 201,
+      "expected_rows_in_out_minor": [
+        21,
+        154218,
+        193994
+      ],
+      "observed_rows_in_out_minor": [
+        21,
+        154218,
+        193994
+      ],
+      "passed": true,
+      "review_count": 12,
+      "category_counts": {
+        "uncategorized": 11,
+        "travel": 2,
+        "software": 4,
+        "meals": 1,
+        "office": 2,
+        "transfer": 1
+      },
+      "warnings": [],
+      "no_unresolved_credit_in_headline_income": true,
+      "financial_reconciliation": true
+    },
+    {
+      "id": "utilly-bank.csv",
+      "file": "utilly-bank.csv",
+      "publisher": "Utilly (matching bank-style CSV)",
+      "url": "https://getutilly.com/sample/bank-csv.csv",
+      "sha256": "5a4ee566046fcb720700c8594028b66b7cf5f26ca7a6465a3f601dcfaa5e4c6d",
+      "params": {
+        "convention": "bank"
+      },
+      "http_status": 201,
+      "expected_rows_in_out_minor": [
+        31,
+        2959743,
+        2857527
+      ],
+      "observed_rows_in_out_minor": [
+        31,
+        2959743,
+        2857527
+      ],
+      "passed": true,
+      "review_count": 26,
+      "category_counts": {
+        "uncategorized": 26,
+        "fees": 1,
+        "software": 2,
+        "transfer": 1,
+        "office": 1
+      },
+      "warnings": [],
+      "no_unresolved_credit_in_headline_income": true,
+      "financial_reconciliation": true
+    },
+    {
+      "id": "utilly-card.csv",
+      "file": "utilly-card.csv",
+      "publisher": "Utilly (matching signed card CSV)",
+      "url": "https://getutilly.com/sample/card-csv.csv",
+      "sha256": "b188b8424707860ca5db645736b466f6bca07c27c6bf3b90ab486f2c3b7a86d5",
+      "params": {
+        "convention": "bank"
+      },
+      "http_status": 201,
+      "expected_rows_in_out_minor": [
+        21,
+        154218,
+        193994
+      ],
+      "observed_rows_in_out_minor": [
+        21,
+        154218,
+        193994
+      ],
+      "passed": true,
+      "review_count": 12,
+      "category_counts": {
+        "uncategorized": 11,
+        "travel": 2,
+        "software": 4,
+        "meals": 1,
+        "office": 2,
+        "transfer": 1
+      },
+      "warnings": [],
+      "no_unresolved_credit_in_headline_income": true,
+      "financial_reconciliation": true
+    },
+    {
+      "id": "bofa-statement-guide.pdf",
+      "file": "bofa-statement-guide.pdf",
+      "publisher": "Bank of America (guide, negative control)",
+      "url": "https://www.bankofamerica.com/content/documents/CG2/How%20To%20Read/en_US/HTR-043235.pdf",
+      "sha256": "c4255bc5d9b30ac9d2edff29bb58cb4c538bd56d8ab2d91878ea2589472431d0",
+      "params": {
+        "convention": "bank"
+      },
+      "http_status": 422,
+      "error": "No transactions found. Use a CSV export or a PDF with a supported transaction table.",
+      "passed": true,
+      "financial_reconciliation": true
+    },
+    {
+      "id": "card-csv-wrong-sign-setting",
+      "file": "utilly-card.csv",
+      "publisher": "Utilly (matching signed card CSV)",
+      "url": "https://getutilly.com/sample/card-csv.csv",
+      "sha256": "b188b8424707860ca5db645736b466f6bca07c27c6bf3b90ab486f2c3b7a86d5",
+      "params": {
+        "convention": "card"
+      },
+      "http_status": 422,
+      "error": "No rows imported. Row 3: Amount sign conflicts with the transaction Type. Check the selected sign convention. Row 4: Amount sign conflicts with the transaction Type. Check the selected sign convention. Row 5: Amount sign conflicts with the transaction Type. Check the selected sign convention. Row 6: Amount sign conflicts with the transaction Type. Check the selected sign convention. Row 8: Amount sign conflicts with the transaction Type. Check the selected sign convention. Row 9: Amount sign conflicts with the transaction Type. Check the selected sign convention. Row 10: Amount sign conflicts with the transaction Type. Check the selected sign convention. Row 11: Amount sign conflicts with the transaction Type. Check the selected sign convention. (19 invalid rows in total.)",
+      "passed": true,
+      "financial_reconciliation": true
+    },
+    {
+      "id": "card-pdf-missing-explicit-year",
+      "file": "utilly-card.pdf",
+      "publisher": "Utilly (independent fictional card sample)",
+      "url": "https://getutilly.com/sample/card.pdf",
+      "sha256": "0217d5e0aad66456a02cfb8733cd7d347d5c17f01c4cdb890ff0d6baec46319f",
+      "params": {
+        "convention": "card"
+      },
+      "http_status": 422,
+      "error": "PDF transaction dates omit the year. Set Statement year under Format details, or use CSV.",
+      "passed": true,
+      "financial_reconciliation": true
+    },
+    {
+      "id": "bank-pdf-csv-every-row-equivalent",
+      "passed": true
+    },
+    {
+      "id": "card-pdf-csv-every-row-equivalent",
+      "passed": true
+    }
+  ],
+  "baseline": {
+    "commit": "a9aa30f",
+    "results": [
+      {
+        "id": "capital-one-sample.pdf",
+        "file": "capital-one-sample.pdf",
+        "publisher": "Capital One (official public sample)",
+        "url": "https://ecm.capitalone.com/WCM/bank/pdfs/sample-estatement.pdf",
+        "sha256": "453a0def3af36ada529c6fe324232fcc6221156081991f26060894ce89cc5e3b",
+        "params": {
+          "convention": "bank"
+        },
+        "http_status": 422,
+        "expected_rows_in_out_minor": [
+          3,
+          724,
+          0
+        ],
+        "observed_rows_in_out_minor": [
+          0,
+          0,
+          0
+        ],
+        "passed": false,
+        "error": "No transactions found. Use a CSV export or a PDF with a supported transaction table.",
+        "financial_reconciliation": true
+      },
+      {
+        "id": "utilly-bank.pdf",
+        "file": "utilly-bank.pdf",
+        "publisher": "Utilly (independent fictional checking sample)",
+        "url": "https://getutilly.com/sample/bank.pdf",
+        "sha256": "738d015a58c7d4fab0bcb84bc2ecb496f7f4a954c1f51bcd7d9842e97526640e",
+        "params": {
+          "convention": "bank"
+        },
+        "http_status": 422,
+        "expected_rows_in_out_minor": [
+          31,
+          2959743,
+          2857527
+        ],
+        "observed_rows_in_out_minor": [
+          0,
+          0,
+          0
+        ],
+        "passed": false,
+        "error": "No transactions found. Use a CSV export or a PDF with a supported transaction table.",
+        "financial_reconciliation": true
+      },
+      {
+        "id": "utilly-card.pdf",
+        "file": "utilly-card.pdf",
+        "publisher": "Utilly (independent fictional card sample)",
+        "url": "https://getutilly.com/sample/card.pdf",
+        "sha256": "0217d5e0aad66456a02cfb8733cd7d347d5c17f01c4cdb890ff0d6baec46319f",
+        "params": {
+          "convention": "card",
+          "statement_year": 2026
+        },
+        "http_status": 422,
+        "expected_rows_in_out_minor": [
+          21,
+          154218,
+          193994
+        ],
+        "observed_rows_in_out_minor": [
+          0,
+          0,
+          0
+        ],
+        "passed": false,
+        "error": "No transactions found. Use a CSV export or a PDF with a supported transaction table.",
+        "financial_reconciliation": true
+      },
+      {
+        "id": "utilly-bank.csv",
+        "file": "utilly-bank.csv",
+        "publisher": "Utilly (matching bank-style CSV)",
+        "url": "https://getutilly.com/sample/bank-csv.csv",
+        "sha256": "5a4ee566046fcb720700c8594028b66b7cf5f26ca7a6465a3f601dcfaa5e4c6d",
+        "params": {
+          "convention": "bank"
+        },
+        "http_status": 422,
+        "expected_rows_in_out_minor": [
+          31,
+          2959743,
+          2857527
+        ],
+        "observed_rows_in_out_minor": [
+          0,
+          0,
+          0
+        ],
+        "passed": false,
+        "error": "No rows imported. Row 5: Missing Debit and Credit values. Row 37: Invalid date ''. Use full years and the selected date order.",
+        "financial_reconciliation": true
+      },
+      {
+        "id": "utilly-card.csv",
+        "file": "utilly-card.csv",
+        "publisher": "Utilly (matching signed card CSV)",
+        "url": "https://getutilly.com/sample/card-csv.csv",
+        "sha256": "b188b8424707860ca5db645736b466f6bca07c27c6bf3b90ab486f2c3b7a86d5",
+        "params": {
+          "convention": "bank"
+        },
+        "http_status": 201,
+        "expected_rows_in_out_minor": [
+          21,
+          154218,
+          193994
+        ],
+        "observed_rows_in_out_minor": [
+          21,
+          154218,
+          193994
+        ],
+        "passed": true,
+        "review_count": 12,
+        "category_counts": {
+          "uncategorized": 11,
+          "travel": 2,
+          "software": 4,
+          "meals": 1,
+          "office": 2,
+          "transfer": 1
+        },
+        "warnings": [],
+        "no_unresolved_credit_in_headline_income": true,
+        "financial_reconciliation": true
+      },
+      {
+        "id": "bofa-statement-guide.pdf",
+        "file": "bofa-statement-guide.pdf",
+        "publisher": "Bank of America (guide, negative control)",
+        "url": "https://www.bankofamerica.com/content/documents/CG2/How%20To%20Read/en_US/HTR-043235.pdf",
+        "sha256": "c4255bc5d9b30ac9d2edff29bb58cb4c538bd56d8ab2d91878ea2589472431d0",
+        "params": {
+          "convention": "bank"
+        },
+        "http_status": 422,
+        "error": "No transactions found. Use a CSV export or a PDF with a supported transaction table.",
+        "passed": true,
+        "financial_reconciliation": true
+      },
+      {
+        "id": "card-csv-wrong-sign-setting",
+        "file": "utilly-card.csv",
+        "publisher": "Utilly (matching signed card CSV)",
+        "url": "https://getutilly.com/sample/card-csv.csv",
+        "sha256": "b188b8424707860ca5db645736b466f6bca07c27c6bf3b90ab486f2c3b7a86d5",
+        "params": {
+          "convention": "card"
+        },
+        "http_status": 201,
+        "error": "",
+        "passed": false,
+        "financial_reconciliation": true
+      },
+      {
+        "id": "card-pdf-missing-explicit-year",
+        "file": "utilly-card.pdf",
+        "publisher": "Utilly (independent fictional card sample)",
+        "url": "https://getutilly.com/sample/card.pdf",
+        "sha256": "0217d5e0aad66456a02cfb8733cd7d347d5c17f01c4cdb890ff0d6baec46319f",
+        "params": {
+          "convention": "card"
+        },
+        "http_status": 422,
+        "error": "No transactions found. Use a CSV export or a PDF with a supported transaction table.",
+        "passed": false,
+        "financial_reconciliation": true
+      },
+      {
+        "id": "bank-pdf-csv-every-row-equivalent",
+        "passed": false
+      },
+      {
+        "id": "card-pdf-csv-every-row-equivalent",
+        "passed": false
+      }
+    ],
+    "passed": 2
+  }
+}

@@ -4,9 +4,9 @@ Verified locally on 26 October 2026, Windows, Python 3.13.12, Node 24.14.1.
 
 | Check | Observed result |
 | --- | --- |
-| Python regression suite | **89 passed** |
+| Python regression suite | **120 passed** |
 | React production build | TypeScript strict checks and Vite build passed |
-| Real browser workflow | **13 passed**, Chromium, approximately 17 seconds |
+| Real browser workflow | **14 passed**, Chromium |
 | Accessibility | No axe violations in tested empty workspace, populated workspace, review dialog and upload dialog |
 | Mobile | 390px viewport, no page overflow; table scroll and transaction review verified |
 | Keyboard | Modal Tab containment, Escape, and trigger focus restoration verified |
@@ -21,3 +21,5 @@ The Python test client emits one upstream Starlette deprecation warning about it
 Commands and prerequisites are in the root README. Performance metadata is in [`benchmark.json`](benchmark.json); regression assertions cover behavior and accounting, rather than a machine-dependent timing threshold. Browser tests use temporary storage and fictional statements. The documented screenshots come from those tests.
 
 Automated checks cover the tested layouts and cases, not universal accessibility or universal bank-format accuracy. PDF imports require comparison with their original documents. The CI workflow additionally declares Windows/Linux and Python 3.11/3.13 coverage; see GitHub Actions for the actual remote run status.
+
+Follow-up external validation: 10/10 checks passed against six public source files, compared with 2/10 for original commit a9aa30f. Five valid PDF/CSV formats match the independently expected row counts and cash totals. See [EXTERNAL_VALIDATION.md](EXTERNAL_VALIDATION.md) for sources, settings, coverage limitations, and the reproducible report.

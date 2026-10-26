@@ -30,6 +30,8 @@ python3 scripts/dev.py
 
 Open **http://127.0.0.1:5173**. Choose **Try a sample statement** for the complete experience using 36 fictional transactions. Ctrl+C stops both services. No real statements are included.
 
+On Windows, the combined runner keeps Python reload off because its console signal can also stop npm; restart after Python edits. Frontend hot reload remains enabled. Separate terminals below can be used for independent backend reload.
+
 To start services separately, run these in two terminals from the repository root (use `.venv/bin/python` on macOS / Linux):
 
 ```powershell
@@ -52,7 +54,7 @@ The headline totals use included rows that **do not need review**. Recognized me
 
 ## Supported statements
 
-CSV: UTF-8/BOM or Windows-1252; comma, semicolon, or tab separators. A header can follow up to 24 preamble rows. Supported header aliases are listed in [`parser.py`](backend/app/parser.py).
+CSV: UTF-8/BOM, BOM-marked UTF-16, or Windows-1252; comma, semicolon, or tab separators. A header can follow up to 24 preamble rows. Transaction date takes priority over posting date; Description takes priority over Details/Memo. Identical duplicate headers remain errors. Supported aliases are listed in [`parser.py`](backend/app/parser.py).
 
 ```csv
 Date,Description,Amount,Currency
@@ -67,13 +69,15 @@ Alternatively use `Date,Description,Debit,Credit` with positive values in the ap
 | --- | --- |
 | Bank account | Negative signed amounts are money out; positive amounts are money in. |
 | Credit card | Positive numeric charges become money out; negative numeric credits become money in. |
+| Card CSV versus PDF | Choose by the actual signs. A card CSV can already have negative expenses even when its PDF uses positive charges. Explicit Sale/Return type conflicts are rejected. |
 | Explicit `CR` / `DR` | Credit means money in and debit means money out, overriding the numeric convention. |
 | Separate Debit / Credit | Positive debit is money out; positive credit is money in. |
 | Dates | ISO `YYYY-MM-DD` always works. Numeric slash/dash dates follow the selected MDY or DMY order, with four-digit years. |
+| PDF dates without years | Recognized text tables can use a full printed statement period. For a short-year period, set **Statement year** under **Format details**; no current-year guess is made. |
 | Decimal separator | Choose period (`1,234.56`) or comma (`1.234,56`). Grouping and precision are validated. |
 | Currency | USD, GBP, EUR, CAD, AUD, PKR; exactly one per statement. No exchange-rate conversion. |
 
-PDF: selectable text with recognizable transaction tables containing the same headers. Repeated table headers are supported. A conservative fallback supports full ISO-date transaction lines ending in a signed two-decimal amount. **Not a universal bank-layout parser.** Scans, encrypted files, malformed transaction rows, and unsupported formats return actionable errors. Pages without supported transaction data produce visible reconciliation warnings and force imported rows into review. Check PDF results against the original; extraction cannot guarantee that an arbitrary layout has no omitted content.
+PDF: selectable text with recognizable ruled transaction tables, plus bounded borderless profiles for Date/Description/Withdrawals/Deposits/Balance, Activity/Date/Amount/Balance, and card transaction-description/amount tables. Repeated page headers are supported. Running balances, opening/closing balances and declared totals are checked when available. A conservative fallback supports full ISO-date transaction lines ending in a signed two-decimal amount. **Not a universal bank-layout parser.** Scans, encrypted files, unsupported wrapping, malformed transaction rows, and unknown layouts return actionable errors. Missing reconciliation or unsupported nontransaction pages produce visible warnings and force imported rows into review. Check PDF results against the original.
 
 Limits: 10 MB, 40 PDF pages, 10,000 transactions per import. Invalid CSV rows abort the entire import and identify the problem rows. Identical files cannot be imported twice; overlapping files flag matching transactions for review rather than deleting them.
 
@@ -89,7 +93,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-The browser suite starts both servers using a fresh temporary database, exercises the actual Python API, and checks desktop/mobile layouts and accessibility with axe. Ports **8000 and 4173 must be free**. Tests run serially as a complete workflow; later browser cases build on earlier review actions. Screenshots and failure traces go to ignored `frontend/test-results/`.
+The browser suite starts both servers using a fresh temporary database, exercises the actual Python API, and checks desktop/mobile layouts and accessibility with axe. Ports **8001 and 4173 must be free**; your normal app can keep running on 8000/5173. Tests run serially as a complete workflow; later browser cases build on earlier review actions. Screenshots and failure traces go to ignored `frontend/test-results/`.
 
 CI runs the backend on Windows and Linux with Python 3.11 and 3.13, plus a Chromium browser workflow on Linux. Dependency versions are recorded in `backend/requirements.lock` and `frontend/package-lock.json`.
 
@@ -123,5 +127,7 @@ scripts/                   Cross-platform runner and sanitized AI usage exporter
 ```
 
 Read [`DESIGN.md`](DESIGN.md) for the engine and tradeoffs, [`AI_USAGE.md`](AI_USAGE.md) for how AI assisted development, and [`TASK.md`](TASK.md) for the original assessment.
+
+See [`docs/EXTERNAL_VALIDATION.md`](docs/EXTERNAL_VALIDATION.md) for tests against independently published statement samples: five exact imports, financial reconciliation, before/after evidence, and candid category-coverage results. Original external statements are kept outside the repository.
 
 The original fork/branch/submission guide is retained at [`docs/SUBMISSION_GUIDE.md`](docs/SUBMISSION_GUIDE.md). Work is on `candidate-Wyrmstooth`, targeting `savvpro/savvpro-test-statement-categorizer:main`.

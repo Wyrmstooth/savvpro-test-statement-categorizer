@@ -38,6 +38,12 @@ python scripts/export_ai_usage.py <local-codex-session.jsonl>
 
 The allowlist exporter has a regression test verifying that conversation content and credential-like fields cannot leak into the artifact. Raw Codex logs must not be committed.
 
+## Follow-up: independently published statement testing
+
+At the user's request, Codex located an official Capital One demonstration PDF and independent fictional checking/card statement files, ran them through isolated real API instances, and compared extracted dates, descriptions and amounts across PDF/CSV representations. Original downloads stayed outside the repository. The previous committed implementation was rerun in a separate temporary process against the same pinned inputs; results are recorded in `docs/external-validation.json`.
+
+This exposed assumptions the initial synthetic tests had missed: conflicting bank export headers, verified summary rows, borderless tables, omitted years, opposite PDF/CSV sign conventions, and refund/payout precedence. Fixes were made in original Python code and supported by authored fictional regression cases. The browser suite now checks the actual PDF year-setting flow. The report explicitly preserves unsupported layouts and low category coverage instead of treating successful extraction as accurate automatic categorization. No external model categorized the transactions.
+
 ## Recorded snapshot
 
 Client-reported model: `gpt-6.1-sol`. Captured at `2026-10-26T13:47:58.616176+00:00`.
@@ -49,3 +55,15 @@ Client-reported model: `gpt-6.1-sol`. Captured at `2026-10-26T13:47:58.616176+00
 | Output | 102,746 |
 | Reasoning output (subset) | 25,080 |
 | Total input + output | 6,381,835 |
+
+## Follow-up token evidence
+
+The follow-up snapshot is [external-validation-token-log.json](docs/ai-usage/external-validation-token-log.json), captured at `2026-10-26T14:24:10.760393+00:00`. It retains cumulative client counters. Additional counts since the initial submission snapshot are below; later PR updates and final reporting are excluded.
+
+| Counter | Additional tokens since initial snapshot |
+| --- | ---: |
+| Input (including cached) | 11,820,127 |
+| Cached input (subset) | 11,724,160 |
+| Output | 60,530 |
+| Reasoning (output subset) | 30,645 |
+| Input + output total | 11,880,657 |
