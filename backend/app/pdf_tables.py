@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
-from app.parser import ParseError, ParsedStatement, money, parse_date, parse_table
+from app.parser import ParsedStatement, ParseError, money, parse_date, parse_table
 
 PROFILES = {
     "date description withdrawals deposits balance": (
@@ -124,7 +124,8 @@ def parse_text_tables(pdf, *, statement_year=None, **options):
                     )
                 if kind == "card" and options["convention"] != "card":
                     raise ParseError(
-                        "This PDF uses positive card charges. Choose 'Charges are positive' for the amount convention."
+                        "This PDF uses positive card charges. "
+                        "Choose 'Charges are positive' for the amount convention."
                     )
                 profile = kind
                 if not table:
@@ -233,7 +234,8 @@ def parse_text_tables(pdf, *, statement_year=None, **options):
             source_lines.append(global_line)
         if not page_header:
             warnings.append(
-                f"Page {page_number} had no supported transaction table. Compare the import with the original."
+                f"Page {page_number} had no supported transaction table. "
+                "Compare the import with the original."
             )
 
     if len(table) <= 1:
@@ -256,7 +258,8 @@ def parse_text_tables(pdf, *, statement_year=None, **options):
             )
     else:
         warnings.append(
-            "PDF has no complete opening/closing reconciliation. Check every transaction against the original."
+            "PDF has no complete opening/closing reconciliation. "
+            "Check every transaction against the original."
         )
     if declared_totals is not None:
         actual = (

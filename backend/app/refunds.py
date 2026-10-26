@@ -170,7 +170,8 @@ def reconcile_refunds(db, new_candidates=()):
                 0,
                 True,
                 [
-                    "The earlier purchase identity, category, inclusion, or available refund capacity changed. Confirm this refund."
+                    "The earlier purchase identity, category, inclusion, or available refund "
+                    "capacity changed. Confirm this refund."
                 ],
                 source="context",
             )

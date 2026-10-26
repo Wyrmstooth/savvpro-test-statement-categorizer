@@ -94,8 +94,8 @@ def download_sources(folder, offline):
 
 
 def run_cases(folder):
-    from fastapi.testclient import TestClient
     from app.main import create_app
+    from fastapi.testclient import TestClient
 
     cases = [{**source, "id": source["file"]} for source in SOURCES]
     cases += [
@@ -121,75 +121,73 @@ def run_cases(folder):
             key: case[key]
             for key in ("id", "file", "publisher", "url", "sha256", "params")
         }
-        with tempfile.TemporaryDirectory(prefix="folio-external-case-") as directory:
-            with TestClient(create_app(str(Path(directory) / "test.db"))) as client:
-                response = client.post(
-                    "/api/statements",
-                    params=case["params"],
-                    files={
-                        "file": (case["file"], (folder / case["file"]).read_bytes()),
-                    },
+        with (
+            tempfile.TemporaryDirectory(prefix="folio-external-case-") as directory,
+            TestClient(create_app(str(Path(directory) / "test.db"))) as client,
+        ):
+            response = client.post(
+                "/api/statements",
+                params=case["params"],
+                files={
+                    "file": (case["file"], (folder / case["file"]).read_bytes()),
+                },
+            )
+            record["http_status"] = response.status_code
+            state = client.get("/api/workspace").json()
+            summary = state["summary"]
+            if case.get("expected_status") == 422:
+                detail = response.json().get("detail", "")
+                record["error"] = detail
+                passed = response.status_code == 422 and not state["statements"]
+                passed &= case.get("error_contains", "").lower() in str(detail).lower()
+                record["passed"] = passed
+            else:
+                expected = case["expected"]
+                observed = [
+                    summary["total"],
+                    summary["cash_in_minor"],
+                    summary["cash_out_minor"],
+                ]
+                record.update(
+                    expected_rows_in_out_minor=expected,
+                    observed_rows_in_out_minor=observed,
                 )
-                record["http_status"] = response.status_code
-                state = client.get("/api/workspace").json()
-                summary = state["summary"]
-                if case.get("expected_status") == 422:
-                    detail = response.json().get("detail", "")
-                    record["error"] = detail
-                    passed = response.status_code == 422 and not state["statements"]
-                    passed &= (
-                        case.get("error_contains", "").lower() in str(detail).lower()
-                    )
-                    record["passed"] = passed
+                record["passed"] = response.status_code == 201 and observed == expected
+                if response.status_code != 201:
+                    record["error"] = response.json().get("detail")
                 else:
-                    expected = case["expected"]
-                    observed = [
-                        summary["total"],
-                        summary["cash_in_minor"],
-                        summary["cash_out_minor"],
+                    record["review_count"] = summary["review_count"]
+                    record["category_counts"] = dict(
+                        Counter(r["category"] for r in state["transactions"])
+                    )
+                    record["warnings"] = response.json()["warnings"]
+                    record["no_unresolved_credit_in_headline_income"] = summary[
+                        "confirmed"
+                    ]["income_minor"] == sum(
+                        r["amount_minor"]
+                        for r in state["transactions"]
+                        if r["included"]
+                        and not r["needs_review"]
+                        and r["category"] == "income"
+                    )
+                    record["passed"] &= record[
+                        "no_unresolved_credit_in_headline_income"
                     ]
-                    record.update(
-                        expected_rows_in_out_minor=expected,
-                        observed_rows_in_out_minor=observed,
+                    transactions[case["id"]] = sorted(
+                        (
+                            r["date"],
+                            r["description"],
+                            r["amount_minor"],
+                            r["currency"],
+                        )
+                        for r in state["transactions"]
                     )
-                    record["passed"] = (
-                        response.status_code == 201 and observed == expected
-                    )
-                    if response.status_code != 201:
-                        record["error"] = response.json().get("detail")
-                    else:
-                        record["review_count"] = summary["review_count"]
-                        record["category_counts"] = dict(
-                            Counter(r["category"] for r in state["transactions"])
-                        )
-                        record["warnings"] = response.json()["warnings"]
-                        record["no_unresolved_credit_in_headline_income"] = summary[
-                            "confirmed"
-                        ]["income_minor"] == sum(
-                            r["amount_minor"]
-                            for r in state["transactions"]
-                            if r["included"]
-                            and not r["needs_review"]
-                            and r["category"] == "income"
-                        )
-                        record["passed"] &= record[
-                            "no_unresolved_credit_in_headline_income"
-                        ]
-                        transactions[case["id"]] = sorted(
-                            (
-                                r["date"],
-                                r["description"],
-                                r["amount_minor"],
-                                r["currency"],
-                            )
-                            for r in state["transactions"]
-                        )
-                record["financial_reconciliation"] = (
-                    sum(c["net_minor"] for c in summary["categories"])
-                    == summary["net_movement_minor"]
-                    == summary["cash_in_minor"] - summary["cash_out_minor"]
-                )
-                record["passed"] &= record["financial_reconciliation"]
+            record["financial_reconciliation"] = (
+                sum(c["net_minor"] for c in summary["categories"])
+                == summary["net_movement_minor"]
+                == summary["cash_in_minor"] - summary["cash_out_minor"]
+            )
+            record["passed"] &= record["financial_reconciliation"]
         results.append(record)
     for name in ("bank", "card"):
         left, right = f"utilly-{name}.pdf", f"utilly-{name}.csv"

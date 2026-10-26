@@ -114,7 +114,8 @@ def resolve_refund(
             0,
             True,
             [
-                "Earlier purchases at this merchant have different categories. Choose which expense this refund offsets."
+                "Earlier purchases at this merchant have different categories. "
+                "Choose which expense this refund offsets."
             ],
             evidence=["refund.conflicting-originals"],
         )
@@ -126,7 +127,8 @@ def resolve_refund(
             0,
             True,
             [
-                "This refund exceeds the remaining accepted spending at this merchant. Check the original purchase."
+                "This refund exceeds the remaining accepted spending at this merchant. "
+                "Check the original purchase."
             ],
             evidence=["refund.exceeds-originals"],
         )
@@ -137,7 +139,8 @@ def resolve_refund(
         False,
         [
             "Explicit refund matched earlier accepted spending at the exact merchant, in the same currency.",
-            "All eligible original purchases agree on the category; this reduces expenses rather than adding income.",
+            "All eligible original purchases agree on the category; "
+            "this reduces expenses rather than adding income.",
         ],
         source="context",
         evidence=[f"refund.original:{r['id']}" for r in candidates[:5]],
@@ -171,7 +174,8 @@ def decide(description: str, amount_minor: int, learned: dict | None = None) -> 
             0,
             True,
             [
-                "Refund or reversal wording conflicts with a payout or client payment. Confirm the money's purpose."
+                "Refund or reversal wording conflicts with a payout or client payment. "
+                "Confirm the money's purpose."
             ],
             evidence=["income.refund-conflict"],
         )

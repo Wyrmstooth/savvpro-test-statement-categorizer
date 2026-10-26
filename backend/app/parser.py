@@ -197,7 +197,7 @@ def parse_table(
             if len(values) != width:
                 raise ParseError("Column count differs from the header.")
 
-            def cell(name: str) -> str:
+            def cell(name: str, values=values) -> str:
                 return str(values[mapping[name]] or "").strip() if name in mapping else ""
 
             description = cell("description")
@@ -211,7 +211,7 @@ def parse_table(
                 raise ParseError("Mixed currencies cannot be reconciled in one statement.")
             table_currency = row_currency
 
-            def parse_money(value):
+            def parse_money(value, row_currency=row_currency):
                 return money(value, decimal_separator=decimal_separator, currency=row_currency)
 
             label = description.casefold()
@@ -367,11 +367,13 @@ def parse_pdf(data: bytes, *, statement_year: int | None = None, **options) -> P
                         rows.extend(parse_table([["Date", "Description", "Amount"], *candidates], **options))
                     elif not text.strip():
                         raise ParseError(
-                            f"Page {page_number} is scanned or empty. Export a text PDF or CSV; OCR is not supported."
+                            f"Page {page_number} is scanned or empty. "
+                            "Export a text PDF or CSV; OCR is not supported."
                         )
                     else:
                         warnings.append(
-                            f"Page {page_number} had no supported transaction table. Compare the import with the original."
+                            f"Page {page_number} had no supported transaction table. "
+                            "Compare the import with the original."
                         )
     except ParseError:
         raise

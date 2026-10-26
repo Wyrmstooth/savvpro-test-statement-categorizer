@@ -18,7 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.engine import CATEGORIES, ENGINE_VERSION, EXPENSE_CATEGORIES, decide, merchant_key
-from app.parser import Currency, ParseError, ParsedStatement, parse_csv, parse_pdf
+from app.parser import Currency, ParsedStatement, ParseError, parse_csv, parse_pdf
 from app.refunds import reconcile_refunds
 from app.storage import connect, initialize, transaction_dict
 
@@ -215,7 +215,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 if duplicate:
                     duplicate_count += 1
                     reasons.append(
-                        "Possible duplicate: same date, original description, amount and currency. Keep or exclude explicitly."
+                        "Possible duplicate: same date, original description, amount and currency. "
+                        "Keep or exclude explicitly."
                     )
                 if parsed.warnings:
                     reasons.append("PDF extraction needs reconciliation with the original statement.")
@@ -384,7 +385,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
             db.execute(
                 """INSERT INTO rules (id,merchant_key,direction,category,created_at,identity_version)
                        VALUES (?,?,?,?,?,2) ON CONFLICT(merchant_key,direction)
-                       DO UPDATE SET category=excluded.category,created_at=excluded.created_at,identity_version=2""",
+                       DO UPDATE SET category=excluded.category,created_at=excluded.created_at,
+                                     identity_version=2""",
                 (uid(), before["merchant_key"], direction, body.category, now()),
             )
         after = transaction_dict(

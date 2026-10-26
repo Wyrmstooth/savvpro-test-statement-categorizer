@@ -10,9 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 
-from fastapi.testclient import TestClient
-
 from app.main import create_app
+from fastapi.testclient import TestClient
 
 
 def main():
@@ -44,22 +43,24 @@ def main():
             ]
         )
     data = stream.getvalue().encode()
-    with tempfile.TemporaryDirectory(prefix="folio-benchmark-") as directory:
-        with TestClient(create_app(str(Path(directory) / "benchmark.db"))) as client:
-            start = perf_counter()
-            response = client.post(
-                "/api/statements", files={"file": ("fictional-benchmark.csv", data)}
-            )
-            imported_seconds = perf_counter() - start
-            response.raise_for_status()
-            start = perf_counter()
-            state = client.get("/api/workspace").json()
-            read_seconds = perf_counter() - start
-            assert state["summary"]["total"] == args.rows
-            assert (
-                sum(g["net_minor"] for g in state["summary"]["categories"])
-                == state["summary"]["net_movement_minor"]
-            )
+    with (
+        tempfile.TemporaryDirectory(prefix="folio-benchmark-") as directory,
+        TestClient(create_app(str(Path(directory) / "benchmark.db"))) as client,
+    ):
+        start = perf_counter()
+        response = client.post(
+            "/api/statements", files={"file": ("fictional-benchmark.csv", data)}
+        )
+        imported_seconds = perf_counter() - start
+        response.raise_for_status()
+        start = perf_counter()
+        state = client.get("/api/workspace").json()
+        read_seconds = perf_counter() - start
+        assert state["summary"]["total"] == args.rows
+        assert (
+            sum(g["net_minor"] for g in state["summary"]["categories"])
+            == state["summary"]["net_movement_minor"]
+        )
     result = {
         "captured_at_utc": datetime.now(UTC).isoformat(),
         "python": platform.python_version(),

@@ -238,7 +238,8 @@ def test_old_rules_schema_upgrades_without_dropping_data(tmp_path):
     path = str(tmp_path / "legacy.db")
     with sqlite3.connect(path) as db:
         db.execute(
-            "CREATE TABLE rules (id TEXT PRIMARY KEY,merchant_key TEXT,direction TEXT,category TEXT,created_at TEXT,UNIQUE(merchant_key,direction))"
+            "CREATE TABLE rules (id TEXT PRIMARY KEY,merchant_key TEXT,direction TEXT,category TEXT,"
+            "created_at TEXT,UNIQUE(merchant_key,direction))"
         )
         db.execute(
             "INSERT INTO rules VALUES (?,?,?,?,?)",
@@ -248,3 +249,38 @@ def test_old_rules_schema_upgrades_without_dropping_data(tmp_path):
     with connect(path) as db:
         row = dict(db.execute("SELECT * FROM rules").fetchone())
         assert row["id"] == "legacy" and row["identity_version"] == 2
+
+
+def test_old_collapsed_unicode_matches_are_repaired_without_changing_manual_decisions(setup):
+    client, path = setup
+    purchase = confirm(client, upload(client, "\u66f8\u5e97", "-10", "2026-01-01"))
+    refund = upload(client, "\u9910\u9928 REFUND", "7", "2026-01-02")
+    with connect(path) as db:
+        db.execute(
+            "UPDATE transactions SET merchant_key='' WHERE id IN (?,?)", (purchase["id"], refund["id"])
+        )
+        db.execute(
+            "UPDATE transactions SET source='context',category='office',needs_review=0 WHERE id=?",
+            (refund["id"],),
+        )
+    initialize(path)
+    current = rows(client)
+    assert current[purchase["id"]]["category"] == "office" and not current[purchase["id"]]["needs_review"]
+    assert current[refund["id"]]["needs_review"]
+    assert allocations(path) == []
+
+
+def test_old_rule_decisions_with_ambiguous_identities_return_to_review(setup):
+    client, path = setup
+    original = confirm(client, upload(client, "SHOP\u66f8\u5e97", "-10", "2026-01-01"), remember=True)
+    wrong = upload(client, "SHOP", "-3", "2026-01-02")
+    with connect(path) as db:
+        db.execute("UPDATE transactions SET merchant_key='SHOP' WHERE id=?", (original["id"],))
+        db.execute(
+            "UPDATE transactions SET source='rule',category='office',needs_review=0 WHERE id=?",
+            (wrong["id"],),
+        )
+        db.execute("UPDATE rules SET merchant_key='SHOP',identity_version=1")
+    initialize(path)
+    assert rows(client)[wrong["id"]]["needs_review"]
+    assert not rows(client)[original["id"]]["needs_review"]
