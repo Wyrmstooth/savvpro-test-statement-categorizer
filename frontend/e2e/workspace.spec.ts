@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -270,5 +272,53 @@ test('large valid category totals preserve every cent in the browser', async ({
   await page.getByRole('combobox', { name: 'Currency', exact: true }).selectOption('EUR');
   await expect(page.getByRole('article').filter({ hasText: 'Business spending' })).toContainText(
     '\u20ac89,999,999,999,999.10',
+  );
+});
+
+test('borderless card PDF requires a year and reconciles through the upload dialog', async ({
+  page,
+}) => {
+  const python = process.env.CI
+    ? 'python'
+    : process.platform === 'win32'
+      ? resolve('../.venv/Scripts/python.exe')
+      : resolve('../.venv/bin/python');
+  const fixture = execFileSync(
+    python,
+    [
+      '-c',
+      'import runpy,sys; fixture=runpy.run_path("../backend/tests/test_pdf_text_tables.py"); sys.stdout.buffer.write(fixture["card_pdf"]())',
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Import statement', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog
+    .getByLabel('Statement file')
+    .setInputFiles({
+      name: 'fictional-card-layout.pdf',
+      mimeType: 'application/pdf',
+      buffer: fixture,
+    });
+  await dialog.getByLabel('Signed amount convention').selectOption('card');
+  await dialog.getByRole('button', { name: 'Import statement', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Statement year');
+  await dialog.getByText('Format details', { exact: true }).click();
+  await dialog.getByRole('spinbutton', { name: /Statement year/ }).fill('2026');
+  expect(
+    (await new AxeBuilder({ page }).analyze()).violations.map((v) => ({
+      id: v.id,
+      nodes: v.nodes.map((n) => n.target),
+    })),
+  ).toEqual([]);
+  await dialog.getByRole('button', { name: 'Import statement', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole('tab', { name: 'All transactions 4' })).toBeVisible();
+  await expect(page.getByRole('article').filter({ hasText: 'Client income' })).toContainText(
+    '$0.00',
+  );
+  await expect(page.getByRole('article').filter({ hasText: 'Business spending' })).toContainText(
+    '$5.00',
   );
 });

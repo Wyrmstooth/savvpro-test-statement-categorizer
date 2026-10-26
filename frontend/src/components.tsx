@@ -123,6 +123,7 @@ export function UploadModal({
   const [dateOrder, setDateOrder] = useState('mdy');
   const [convention, setConvention] = useState('bank');
   const [decimal, setDecimal] = useState('.');
+  const [statementYear, setStatementYear] = useState('');
   const input = useRef<HTMLInputElement>(null);
 
   function choose(candidate?: File) {
@@ -156,6 +157,9 @@ export function UploadModal({
         convention,
         decimal_separator: decimal,
       });
+      if (statementYear && file.name.toLowerCase().endsWith('.pdf')) {
+        params.set('statement_year', statementYear);
+      }
       const result = await request<{
         statement_id: string;
         row_count: number;
@@ -231,8 +235,8 @@ export function UploadModal({
       <label>
         Signed amount convention
         <select value={convention} onChange={(e) => setConvention(e.target.value)} disabled={busy}>
-          <option value="bank">Bank account · expenses are negative</option>
-          <option value="card">Credit card · charges are positive</option>
+          <option value="bank">Expenses are negative · bank / signed exports</option>
+          <option value="card">Charges are positive · card statements</option>
         </select>
       </label>
       <p className="field-hint">
@@ -249,6 +253,22 @@ export function UploadModal({
             <option value=",">Comma · 1.234,56</option>
           </select>
         </label>
+        {file?.name.toLowerCase().endsWith('.pdf') && (
+          <label>
+            Statement year <span className="optional">if dates omit the full year</span>
+            <input
+              className="year-input"
+              type="number"
+              min="1900"
+              max="2100"
+              step="1"
+              value={statementYear}
+              onChange={(e) => setStatementYear(e.target.value)}
+              placeholder="e.g. 2026"
+              disabled={busy}
+            />
+          </label>
+        )}
         <p>
           CSV needs Date, Description and Amount, or Debit / Credit columns. PDFs need selectable
           text and a transaction table. Scanned PDFs aren’t supported.

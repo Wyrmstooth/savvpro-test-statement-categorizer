@@ -3377,3 +3377,14 @@ tbody tr:hover {
 .danger:hover:not(:disabled) {
   background: #8e4735;
 }
+.modal .year-input {
+  width: 100%;
+  border: 1px solid #e3e9dc;
+  border-radius: 7px;
+  padding: 10px 11px;
+  background: #fcfdf9;
+  color: #59674e;
+  font-size: 12px;
+  margin-top: 8px;
+  min-height: 38px;
+}
